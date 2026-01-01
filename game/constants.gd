@@ -1,0 +1,20 @@
+extends Node
+
+const GRAVITY = 800.0
+const JUMP_VELOCITY = -400.0
+const PLAYER_SPEED = 200.0
+const ENEMY_SPEED = 100.0
+const ACTOR_SIZE = 32
+const PLATFORM_HEIGHT = 16
+const DEATH_Y = 600.0
+const GROUND_CHECK_THRESHOLD = 8.0
+const COLLISION_LANDING_TOLERANCE = 50.0
+
+const SERVER_HOST = "127.0.0.1"
+const SERVER_PORT = 3008
+
+const KEY_MAPPING = {
+	"left": [KEY_A, KEY_LEFT],
+	"right": [KEY_D, KEY_RIGHT],
+	"jump": [KEY_W, KEY_SPACE, KEY_UP]
+}

@@ -1,0 +1,18 @@
+{
+  "move_x": 0.0,
+  "vel_x": 0.0,
+  "vel_y": 0.0,
+  "on_ground": true,
+  "speed": 200.0,
+  "gravity": 800.0,
+  "speed_buff": 1.0,
+  "keys_held": {"0": false, "1": false},
+  "_config": {
+    "systems": [
+      {"name": "movement", "mode": "ADD", "priority": 1, "enabled": true},
+      {"name": "jumping", "mode": "ADD", "priority": 1, "enabled": true},
+      {"name": "speed_buff", "mode": "MULTIPLY", "priority": 2, "enabled": true},
+      {"name": "physics", "mode": "SYSTEM", "priority": 99, "enabled": true}
+    ]
+  }
+}

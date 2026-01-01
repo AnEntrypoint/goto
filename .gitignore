@@ -1,0 +1,13 @@
+*.exe
+*.stackdump
+node_modules/
+.DS_Store
+*.log
+.env
+.env.local
+dist/
+build/
+.godot/
+*.md
+!README.md
+glootie/

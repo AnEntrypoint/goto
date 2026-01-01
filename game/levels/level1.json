@@ -1,0 +1,16 @@
+{
+  "platforms": [
+    {"x": 200, "y": 480, "breakable": false},
+    {"x": 600, "y": 410, "breakable": true, "max_hits": 2},
+    {"x": 200, "y": 350, "breakable": true, "max_hits": 2},
+    {"x": 600, "y": 290, "breakable": true, "max_hits": 2},
+    {"x": 200, "y": 230, "breakable": false}
+  ],
+  "enemies": [
+    {"x": 400, "y": 300, "speed": 150}
+  ],
+  "players": [
+    {"id": 1, "x": 200, "y": 400},
+    {"id": 2, "x": 250, "y": 400}
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "name": "Summit's Throne",
+  "platforms": [
+    {"x": 640, "y": 680, "width": 280, "breakable": false},
+    {"x": 150, "y": 600, "width": 140, "breakable": true, "max_hits": 1},
+    {"x": 450, "y": 580, "width": 110, "breakable": false},
+    {"x": 1130, "y": 600, "width": 140, "breakable": true, "max_hits": 1},
+    {"x": 300, "y": 500, "width": 130, "breakable": true, "max_hits": 2},
+    {"x": 640, "y": 490, "width": 120, "breakable": false},
+    {"x": 800, "y": 480, "width": 120, "breakable": false},
+    {"x": 950, "y": 500, "width": 130, "breakable": true, "max_hits": 2},
+    {"x": 200, "y": 400, "width": 130, "breakable": true, "max_hits": 1},
+    {"x": 640, "y": 380, "width": 100, "breakable": false},
+    {"x": 1080, "y": 400, "width": 130, "breakable": true, "max_hits": 1},
+    {"x": 400, "y": 300, "width": 140, "breakable": true, "max_hits": 1},
+    {"x": 640, "y": 290, "width": 120, "breakable": false},
+    {"x": 880, "y": 280, "width": 120, "breakable": false},
+    {"x": 150, "y": 200, "width": 130, "breakable": true, "max_hits": 2},
+    {"x": 640, "y": 180, "width": 100, "breakable": true, "max_hits": 1},
+    {"x": 1130, "y": 200, "width": 130, "breakable": true, "max_hits": 2},
+    {"x": 640, "y": 60, "width": 300, "breakable": false}
+  ],
+  "enemies": [
+    {"x": 450, "y": 564, "speed": 200, "dir": 1},
+    {"x": 800, "y": 464, "speed": 200, "dir": -1},
+    {"x": 400, "y": 284, "speed": 210, "dir": 1},
+    {"x": 880, "y": 264, "speed": 210, "dir": -1},
+    {"x": 640, "y": 164, "speed": 200, "dir": 1}
+  ],
+  "goal": {"x": 640, "y": 20}
+}

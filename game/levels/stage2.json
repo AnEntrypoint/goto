@@ -1,0 +1,28 @@
+{
+  "name": "Glacier Pass",
+  "platforms": [
+    {"x": 640, "y": 680, "width": 350, "breakable": false},
+    {"x": 150, "y": 600, "width": 180, "breakable": true, "max_hits": 1},
+    {"x": 600, "y": 580, "width": 150, "breakable": false},
+    {"x": 1130, "y": 600, "width": 180, "breakable": true, "max_hits": 1},
+    {"x": 300, "y": 500, "width": 180, "breakable": true, "max_hits": 2},
+    {"x": 850, "y": 480, "width": 150, "breakable": false},
+    {"x": 1050, "y": 500, "width": 180, "breakable": true, "max_hits": 2},
+    {"x": 150, "y": 400, "width": 150, "breakable": true, "max_hits": 1},
+    {"x": 640, "y": 380, "width": 150, "breakable": false},
+    {"x": 1130, "y": 400, "width": 150, "breakable": true, "max_hits": 1},
+    {"x": 400, "y": 300, "width": 180, "breakable": true, "max_hits": 2},
+    {"x": 640, "y": 290, "width": 150, "breakable": false},
+    {"x": 900, "y": 280, "width": 150, "breakable": false},
+    {"x": 200, "y": 200, "width": 180, "breakable": true, "max_hits": 1},
+    {"x": 640, "y": 180, "width": 150, "breakable": false},
+    {"x": 1080, "y": 200, "width": 180, "breakable": true, "max_hits": 1},
+    {"x": 640, "y": 100, "width": 300, "breakable": false}
+  ],
+  "enemies": [
+    {"x": 600, "y": 564, "speed": 170, "dir": 1},
+    {"x": 900, "y": 264, "speed": 170, "dir": -1},
+    {"x": 640, "y": 184, "speed": 180, "dir": 1}
+  ],
+  "goal": {"x": 640, "y": 50}
+}

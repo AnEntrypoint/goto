@@ -1,0 +1,23 @@
+{
+  "name": "Icy Peak",
+  "platforms": [
+    {"x": 640, "y": 680, "width": 400, "breakable": false},
+    {"x": 200, "y": 600, "width": 200, "breakable": true, "max_hits": 2},
+    {"x": 1080, "y": 600, "width": 200, "breakable": true, "max_hits": 2},
+    {"x": 640, "y": 540, "width": 200, "breakable": false},
+    {"x": 200, "y": 460, "width": 200, "breakable": true, "max_hits": 2},
+    {"x": 1080, "y": 460, "width": 200, "breakable": true, "max_hits": 2},
+    {"x": 640, "y": 400, "width": 200, "breakable": false},
+    {"x": 200, "y": 320, "width": 200, "breakable": true, "max_hits": 2},
+    {"x": 1080, "y": 320, "width": 200, "breakable": true, "max_hits": 2},
+    {"x": 640, "y": 260, "width": 200, "breakable": false},
+    {"x": 200, "y": 180, "width": 200, "breakable": true, "max_hits": 2},
+    {"x": 640, "y": 160, "width": 200, "breakable": false},
+    {"x": 1080, "y": 180, "width": 200, "breakable": true, "max_hits": 2},
+    {"x": 640, "y": 80, "width": 300, "breakable": false}
+  ],
+  "enemies": [
+    {"x": 200, "y": 568, "speed": 150, "dir": 1}
+  ],
+  "goal": {"x": 640, "y": 40}
+}

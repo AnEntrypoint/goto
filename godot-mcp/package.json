@@ -1,0 +1,23 @@
+{
+  "name": "godot-mcp",
+  "version": "0.1.0",
+  "description": "Claude Code MCP server for Godot game development with live REPL",
+  "type": "module",
+  "bin": {
+    "godot-mcp": "./index.js"
+  },
+  "files": [
+    "index.js"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "0.6.0"
+  },
+  "license": "MIT",
+  "keywords": [
+    "godot",
+    "mcp",
+    "repl",
+    "game-dev",
+    "claude-code"
+  ]
+}
