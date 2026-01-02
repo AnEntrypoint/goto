@@ -682,21 +682,31 @@ wss.on('connection', (ws) => {
       if (!msg) return;
       const data = JSON.parse(msg.toString());
       if (!data || typeof data !== 'object') return;
-      if (data.action === 'nextstage') {
+
+      const action = data.action;
+      if (typeof action !== 'string') {
+        if (!data.action && typeof data.direction === 'number' && typeof data.action !== 'undefined') {
+          game.pendingInput.set(playerId, data);
+        }
+        return;
+      }
+
+      if (action === 'nextstage') {
         game.nextStage();
-      } else if (data.action === 'pause') {
+      } else if (action === 'pause') {
         game.pausedPlayers.add(playerId);
         if (game.pausedPlayers.size === game.clients.size) {
           game.paused = true;
           console.error(`[PAUSE] All ${game.clients.size} players paused`);
         }
-      } else if (data.action === 'resume') {
+      } else if (action === 'resume') {
         game.pausedPlayers.delete(playerId);
         if (game.pausedPlayers.size < game.clients.size) {
           game.paused = false;
           console.error(`[RESUME] Game resumed (${game.clients.size - game.pausedPlayers.size} playing)`);
         }
-      } else {
+      } else if (action === 'move' || action === 'jump') {
+        if (typeof data.direction !== 'number' && action === 'move') return;
         game.pendingInput.set(playerId, data);
       }
     } catch (e) {
