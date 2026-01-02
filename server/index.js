@@ -421,6 +421,9 @@ class PhysicsGame {
         }
 
         if (aabbHits) {
+          if (this.frame % 60 === 0) {
+            console.error(`[HIT] ${nameA} collided with ${nameB}`);
+          }
           if (actorB.type === 'enemy' && actorA.type === 'player') {
             console.error(`[COLLISION] Player ${actorA.name} hit by enemy ${actorB.name} at distance dx=${Math.abs(bodyA.position.x - bodyB.position.x).toFixed(1)}, dy=${Math.abs(bodyA.position.y - bodyB.position.y).toFixed(1)}`);
             if (actorA.state.invulnerable <= 0) {
@@ -432,38 +435,51 @@ class PhysicsGame {
             }
           }
 
+          // Handle player/enemy landing on platform (check both directions)
+          let movingActor, platformActor, movingBody, platformBody;
           if ((actorA.type === 'player' || actorA.type === 'enemy') && (actorB.type === 'platform' || actorB.type === 'breakable_platform')) {
-            const prevY = bodyA._prevPos?.y || bodyA.position.y;
-            // Landing: moving down, was above platform top, now crossing platform top
-            const platformTop = bodyB.position.y - (bodyB._height || 16) / 2;
-            const playerBottom = bodyA.position.y + (bodyA._height || 32) / 2;
-            const prevPlayerBottom = prevY + (bodyA._height || 32) / 2;
-            const landingFromAbove = bodyA.velocity.y > 0 && prevPlayerBottom <= platformTop && playerBottom >= platformTop;
+            movingActor = actorA;
+            platformActor = actorB;
+            movingBody = bodyA;
+            platformBody = bodyB;
+          } else if ((actorB.type === 'player' || actorB.type === 'enemy') && (actorA.type === 'platform' || actorA.type === 'breakable_platform')) {
+            movingActor = actorB;
+            platformActor = actorA;
+            movingBody = bodyB;
+            platformBody = bodyA;
+          }
+
+          if (movingActor && platformActor) {
+            const prevY = movingBody._prevPos?.y || movingBody.position.y;
+            const platformTop = platformBody.position.y - (platformBody._height || 16) / 2;
+            const playerBottom = movingBody.position.y + (movingBody._height || 32) / 2;
+            const prevPlayerBottom = prevY + (movingBody._height || 32) / 2;
+            const landingFromAbove = movingBody.velocity.y > 0 && prevPlayerBottom <= platformTop && playerBottom >= platformTop;
 
             if (landingFromAbove) {
-              if (actorA.type === 'player') {
-                console.error(`[LAND] Player landed on ${actorB.name} at Y ${bodyA.position.y.toFixed(1)}`);
+              if (movingActor.type === 'player') {
+                console.error(`[LAND] Player landed on ${platformActor.name} at Y ${movingBody.position.y.toFixed(1)}`);
               }
-              bodyA.velocity.y = 0;
-              bodyA.position.y = bodyB.position.y - (bodyA._height || 32) / 2 - (bodyB._height || 16) / 2;
-              actorA.state.on_ground = true;
-              actorA.state._landed_this_frame = true;
-              actorA.state._coyote_counter = 0;
+              movingBody.velocity.y = 0;
+              movingBody.position.y = platformBody.position.y - (movingBody._height || 32) / 2 - (platformBody._height || 16) / 2;
+              movingActor.state.on_ground = true;
+              movingActor.state._landed_this_frame = true;
+              movingActor.state._coyote_counter = 0;
 
-              if (actorB.type === 'breakable_platform') {
-                const alreadyHit = actorB.state._broken_by === nameA;
+              if (platformActor.type === 'breakable_platform') {
+                const alreadyHit = platformActor.state._broken_by === movingActor.name;
                 if (!alreadyHit) {
-                  actorB.state._broken_by = nameA;
-                  actorB.state.hit_count++;
-                  if (actorA.type === 'player') {
-                    actorA.state.score += 10;
-                    console.error(`[SCORE] Player ${actorA.state.player_id} scored +10 (total: ${actorA.state.score}) for damaging platform ${actorB.name}`);
+                  platformActor.state._broken_by = movingActor.name;
+                  platformActor.state.hit_count++;
+                  if (movingActor.type === 'player') {
+                    movingActor.state.score += 10;
+                    console.error(`[SCORE] Player ${movingActor.state.player_id} scored +10 (total: ${movingActor.state.score}) for damaging platform ${platformActor.name}`);
                   }
                 }
-                if (actorB.state.hit_count >= actorB.state.max_hits && !actorB.state._confirmed_broken) {
-                  actorB.state._confirmed_broken = true;
-                  actorB.state.removed = true;
-                  console.error(`[BREAK] Platform ${actorB.name} broke (${actorB.state.hit_count}/${actorB.state.max_hits} hits)`);
+                if (platformActor.state.hit_count >= platformActor.state.max_hits && !platformActor.state._confirmed_broken) {
+                  platformActor.state._confirmed_broken = true;
+                  platformActor.state.removed = true;
+                  console.error(`[BREAK] Platform ${platformActor.name} broke (${platformActor.state.hit_count}/${platformActor.state.max_hits} hits)`);
                 }
               }
             }
