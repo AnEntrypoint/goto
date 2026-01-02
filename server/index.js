@@ -204,7 +204,7 @@ class PhysicsGame {
         player_id: extra.player_id,
         speed: extra.speed || (type === 'player' ? PHYSICS.PLAYER_SPEED : PHYSICS.ENEMY_SPEED),
         patrol_dir: extra.patrol_dir || -1,
-        on_ground: type === "player" ? true : false,
+        on_ground: type === "player" || type === "enemy" ? true : false,
         hit_count: 0,
         max_hits: extra.max_hits || 3,
         width: extra.width || 32,
@@ -222,6 +222,9 @@ class PhysicsGame {
     console.error(`[SPAWN] Adding ${type} as "${actor.name}" to actors map (actor: ${JSON.stringify({name:actor.name, type, player_id:actor.state.player_id})})`);
     this.actors.set(actor.name, actor);
     console.error(`[SPAWN] Actors map size after add: ${this.actors.size}`);
+    if (type === 'enemy') {
+      console.error(`[SPAWN] Enemy ${actor.name} spawned at (${pos[0].toFixed(0)}, ${pos[1].toFixed(0)}) on_ground=${actor.state.on_ground} speed=${actor.state.speed}`);
+    }
     this.bodies.set(actor.name, body);
 
     if (type === 'player' && extra.player_id) {
@@ -480,6 +483,9 @@ class PhysicsGame {
             const restingOnPlatform = playerBottom > platformTop - 2 && playerBottom < platformBot + 2;
 
             if (landingFromAbove || restingOnPlatform) {
+              if (movingActor.type === 'enemy') {
+                console.error(`[COLLISION] Enemy ${movingActor.name} landed on platform ${platformActor.name} at (${movingBody.position.x.toFixed(0)}, ${movingBody.position.y.toFixed(0)}) landing=${landingFromAbove} resting=${restingOnPlatform}`);
+              }
               movingBody.velocity.y = 0;
               movingActor.state._coyote_counter = 0;
 
@@ -521,7 +527,11 @@ class PhysicsGame {
         // Skip on_ground reset for 1 frame after jump to let gravity take effect
         const jumpedThisFrame = actor.state._jump_frame === this.frame;
         if (!jumpedThisFrame) {
-          actor.state.on_ground = contactList.length > 0;
+          const newState = contactList.length > 0;
+          if (actor.type === 'enemy' && newState !== actor.state.on_ground) {
+            console.error(`[STATE] Enemy ${actorName} on_ground: ${actor.state.on_ground} → ${newState} (contacts: ${contactList.join(',')})`);
+          }
+          actor.state.on_ground = newState;
         }
       }
     }
