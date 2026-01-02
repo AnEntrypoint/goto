@@ -426,6 +426,7 @@ class PhysicsGame {
           actor.body.velocity.y = 0;
           actor.state.respawn_time = -1;
           actor.state.on_ground = true;
+          actor.state.invulnerable = PHYSICS.INVULNERABILITY_TIME;
         }
       }
 
@@ -524,13 +525,20 @@ class PhysicsGame {
 
           if (movingActor && platformActor) {
             const prevY = movingBody._prevPos?.y || movingBody.position.y;
+            const prevX = movingBody._prevPos?.x || movingBody.position.x;
             const platformTop = platformBody.position.y - (platformBody._height || 16) / 2;
             const platformBot = platformBody.position.y + (platformBody._height || 16) / 2;
+            const platformLeft = platformBody.position.x - (platformBody._width || 32) / 2;
+            const platformRight = platformBody.position.x + (platformBody._width || 32) / 2;
             const playerHH = (movingBody._height || 32) / 2;
+            const playerHW = (movingBody._width || 32) / 2;
             const prevPlayerBottom = prevY + playerHH;
             const playerBottom = movingBody.position.y + playerHH;
-            const landingFromAbove = movingBody.velocity.y > 0 && prevPlayerBottom < platformTop && playerBottom >= platformTop;
-            const restingOnPlatform = playerBottom > platformTop - 2 && playerBottom < platformBot + 2;
+            const playerLeft = movingBody.position.x - playerHW;
+            const playerRight = movingBody.position.x + playerHW;
+            const xOverlap = playerRight >= platformLeft && playerLeft <= platformRight;
+            const landingFromAbove = xOverlap && movingBody.velocity.y > 0 && prevPlayerBottom < platformTop && playerBottom >= platformTop;
+            const restingOnPlatform = xOverlap && playerBottom > platformTop - 2 && playerBottom < platformBot + 2;
 
             if (landingFromAbove || restingOnPlatform) {
               movingBody.velocity.y = 0;
@@ -799,7 +807,8 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 const game = new PhysicsGame();
-let nextPlayerId = 1;
+let nextPlayerId = 0;
+const getNextPlayerId = () => ++nextPlayerId;
 let updateVersion = 0;
 const stats = {
   messagesSent: 0,
@@ -821,7 +830,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 wss.on('connection', (ws) => {
-  const playerId = nextPlayerId++;
+  const playerId = getNextPlayerId();
   const spawnPos = [500 + (playerId - 1) * 50, 664];
   game.spawn('player', spawnPos, { player_id: playerId });
 
