@@ -161,7 +161,8 @@ function serializeActorFull(actor) {
   } else if (actor.type === 'breakable_platform') {
     base.state = {
       width: state.width || 32,
-      hit_count: state.hit_count || 0
+      hit_count: state.hit_count || 0,
+      max_hits: state.max_hits || 3
     };
   }
 
@@ -452,7 +453,7 @@ class PhysicsGame {
       if (actor.state.respawn_time > 0) {
         actor.state.respawn_time -= TICK_MS / 1000;
 
-        if (actor.state.respawn_time <= 0 && actor.state.respawn_time > -0.016) {
+        if (actor.state.respawn_time <= 0 && actor.state.respawn_time > -(TICK_MS / 1000) * 2) {
           const spawnPos = this.getSpawnPosition(actor.state.player_id);
           actor.body.position.x = spawnPos[0];
           actor.body.position.y = spawnPos[1];
@@ -1029,7 +1030,7 @@ app.get('/api/actor/:name', (req, res) => {
 
 app.post('/api/stage/:num', (req, res) => {
   const num = parseInt(req.params.num);
-  if (num < 1 || num > 4) return res.status(400).json({ error: 'Invalid stage' });
+  if (isNaN(num) || num < 1 || num > 4) return res.status(400).json({ error: 'Invalid stage' });
   if (num !== game.stage) game.loadStage(num);
   res.json({ stage: game.stage, name: game.level.name });
 });
@@ -1039,13 +1040,16 @@ app.post('/api/spawn/:type', (req, res) => {
   if (req.params.type === 'player' && !extra.player_id) {
     extra.player_id = Math.max(...Array.from(game.playerActors.keys()), 0) + 1;
   }
-  game.spawn(req.params.type, [x, y], extra);
+  const actor = game.spawn(req.params.type, [x, y], extra);
+  if (!actor) {
+    return res.status(400).json({ error: 'Invalid actor type' });
+  }
   res.json({ ok: true });
 });
 
 app.post('/api/input', (req, res) => {
   const { player_id, action, direction } = req.body || {};
-  if (!player_id || !action) {
+  if (player_id === undefined || player_id === null || !action) {
     return res.status(400).json({ error: 'player_id and action required' });
   }
   if (!game.checkInputRateLimit(player_id)) {
@@ -1072,6 +1076,7 @@ app.get('/api/levels', (req, res) => {
 
 app.get('/api/level/:num', (req, res) => {
   const num = parseInt(req.params.num);
+  if (isNaN(num) || num < 1 || num > 4) return res.status(400).json({ error: 'Invalid stage' });
   const filePath = path.join(__dirname, '..', 'game', `levels/stage${num}.json`);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Level not found' });
   res.json(JSON.parse(fs.readFileSync(filePath, 'utf8')));
