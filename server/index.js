@@ -1073,7 +1073,13 @@ app.post('/api/stage/:num', (req, res) => {
 });
 
 app.post('/api/spawn/:type', (req, res) => {
-  const { x = 640, y = 360, ...extra } = req.body || {};
+  let { x = 640, y = 360, ...extra } = req.body || {};
+  if (typeof x !== 'number') x = 640;
+  if (typeof y !== 'number') y = 360;
+  if (extra.width !== undefined && typeof extra.width !== 'number') delete extra.width;
+  if (extra.max_hits !== undefined && typeof extra.max_hits !== 'number') delete extra.max_hits;
+  if (extra.speed !== undefined && typeof extra.speed !== 'number') delete extra.speed;
+  if (extra.patrol_dir !== undefined && typeof extra.patrol_dir !== 'number') delete extra.patrol_dir;
   if (req.params.type === 'player' && (extra.player_id === undefined || extra.player_id === null)) {
     const maxId = Array.from(game.playerActors.keys()).reduce((max, id) => Math.max(max, id), 0);
     extra.player_id = maxId + 1;
