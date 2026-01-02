@@ -9,6 +9,22 @@ const particles = new ParticleSystem();
 const sprites = new SpriteRenderer();
 const sound = new SoundManager();
 
+const MSG_TYPES = {
+  INIT: 0,
+  UPDATE: 1,
+  GOAL: 2,
+  STAGELOAD: 3,
+  SPAWN: 4,
+  REMOVE: 5,
+  PAUSE: 6,
+  RESUME: 7
+};
+
+let unpackr = null;
+if (typeof Unpackr !== 'undefined') {
+  unpackr = new Unpackr({ useRecords: false });
+}
+
 class FloatingNumber {
   constructor(value, x, y) {
     this.value = value;
@@ -125,8 +141,18 @@ class GameClient {
 
     this.ws.onmessage = (evt) => {
       try {
-        const msg = JSON.parse(evt.data);
-        this.handleMessage(msg);
+        let msg;
+        if (evt.data instanceof ArrayBuffer) {
+          if (!unpackr) throw new Error('msgpackr not loaded');
+          const arr = unpackr.unpack(new Uint8Array(evt.data));
+          msg = { type: arr[0], data: arr[1] };
+        } else if (typeof evt.data === 'string') {
+          msg = JSON.parse(evt.data);
+        } else {
+          const arr = unpackr.unpack(evt.data);
+          msg = { type: arr[0], data: arr[1] };
+        }
+        this.handleMessageBinary(msg);
       } catch (e) {
         console.error('Parse error:', e);
       }
@@ -152,6 +178,100 @@ class GameClient {
     const delayMs = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 10000);
     console.error(`Attempting reconnect ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delayMs}ms`);
     setTimeout(() => this.connect(), delayMs);
+  }
+
+  handleMessageBinary(msg) {
+    if (typeof msg.type === 'number') {
+      switch (msg.type) {
+        case MSG_TYPES.INIT:
+          return this.handleInit(msg.data);
+        case MSG_TYPES.UPDATE:
+          return this.handleUpdate(msg.data);
+        case MSG_TYPES.GOAL:
+          return this.handleGoal(msg.data);
+        case MSG_TYPES.STAGELOAD:
+          return this.handleStageload(msg.data);
+        case MSG_TYPES.SPAWN:
+          return this.handleSpawn(msg.data);
+        case MSG_TYPES.REMOVE:
+          return this.handleRemove(msg.data);
+      }
+    } else if (typeof msg.type === 'string') {
+      return this.handleMessage(msg);
+    }
+  }
+
+  handleInit(data) {
+    this.playerId = data.playerId;
+    this.stage = data.stage;
+    this.levelName = data.levelName;
+    this.frame = data.frame;
+    this.goal = data.goal;
+    this.goalReached = false;
+    this.actors.clear();
+    for (const actor of data.actors) {
+      this.spawnActor(actor);
+    }
+    this.updateCamera();
+  }
+
+  handleUpdate(data) {
+    if (data && typeof data.frame === 'number') this.frame = data.frame;
+    if (data && typeof data.stage === 'number') this.stage = data.stage;
+    if (data && data.actors && typeof data.actors === 'object') {
+      for (const name in data.actors) {
+        if (this.actors.has(name)) {
+          const actor = this.actors.get(name);
+          const lastState = this.lastActorState.get(name) || {};
+          const newState = data.actors[name].state || {};
+
+          if (Array.isArray(data.actors[name].pos)) actor.pos = [...data.actors[name].pos];
+          if (Array.isArray(data.actors[name].vel)) actor.vel = [...data.actors[name].vel];
+          if (data.actors[name].state && typeof data.actors[name].state === 'object') {
+            actor.state = { ...data.actors[name].state };
+          }
+
+          this.detectStateChanges(actor, lastState, newState);
+          this.lastActorState.set(name, { ...newState });
+        }
+      }
+    }
+    this.updateCamera();
+  }
+
+  handleGoal(data) {
+    if (data.playerId === this.playerId) {
+      this.goalReached = true;
+      this.goalTime = this.frame;
+      if (this.goal) {
+        particles.emit('confetti', this.goal.x, this.goal.y);
+        particles.emit('confetti', this.goal.x, this.goal.y);
+      }
+      sound.playGoal();
+      this.camera.targetZoom = 1.2;
+    }
+  }
+
+  handleStageload(data) {
+    this.stage = data.stage;
+    this.levelName = data.levelName;
+    this.goal = data.goal;
+    this.actors.clear();
+    this.lastActorState.clear();
+    this.floatingNumbers = [];
+    this.goalReached = false;
+    this.paused = false;
+    for (const actor of data.actors) {
+      this.spawnActor(actor);
+    }
+  }
+
+  handleSpawn(data) {
+    this.spawnActor(data.actor);
+  }
+
+  handleRemove(data) {
+    this.actors.delete(data.name);
   }
 
   handleMessage(msg) {

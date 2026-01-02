@@ -4,10 +4,24 @@ const WebSocket = require('ws');
 const fs = require('fs');
 const path = require('path');
 const { Engine, World, Body, Events, Composite } = require('matter-js');
+const { Packr, addExtension } = require('msgpackr');
 
 const PORT = process.env.PORT || 3008;
 const TICK_RATE = 60;
 const TICK_MS = 1000 / TICK_RATE;
+
+const msgpack = new Packr({ useRecords: false, maxDepth: 10 });
+
+const MSG_TYPES = {
+  INIT: 0,
+  UPDATE: 1,
+  GOAL: 2,
+  STAGELOAD: 3,
+  SPAWN: 4,
+  REMOVE: 5,
+  PAUSE: 6,
+  RESUME: 7
+};
 
 const PHYSICS = {
   GRAVITY: 1200,
@@ -18,6 +32,61 @@ const PHYSICS = {
   INVULNERABILITY_TIME: 1.5,
   RESPAWN_TIME: 5
 };
+
+function buildInitMessage(playerId, stage, levelName, goal, frame, actors) {
+  return [MSG_TYPES.INIT, { playerId, stage, levelName, goal, frame, actors }];
+}
+
+function buildUpdateMessage(version, frame, stage, actors) {
+  return [MSG_TYPES.UPDATE, { version, frame, stage, actors }];
+}
+
+function buildGoalMessage(playerId, stage) {
+  return [MSG_TYPES.GOAL, { playerId, stage }];
+}
+
+function buildStageloadMessage(stage, levelName, goal, actors) {
+  return [MSG_TYPES.STAGELOAD, { stage, levelName, goal, actors }];
+}
+
+function serializeActorState(actor) {
+  return {
+    n: actor.name,
+    t: actor.type,
+    x: Math.round(actor.body.position.x * 10) / 10,
+    y: Math.round(actor.body.position.y * 10) / 10,
+    vx: Math.round(actor.body.velocity.x * 10) / 10,
+    vy: Math.round(actor.body.velocity.y * 10) / 10,
+    w: actor.state.width,
+    p: actor.state.player_id || 0,
+    l: actor.state.lives || 0,
+    s: actor.state.score || 0,
+    d: actor.state.deaths || 0,
+    rt: Math.round(actor.state.respawn_time * 10) / 10,
+    iv: Math.round(actor.state.invulnerable * 100) / 100,
+    og: actor.state.on_ground ? 1 : 0,
+    hc: actor.state.hit_count || 0
+  };
+}
+
+function serializeActorFull(actor) {
+  return {
+    name: actor.name,
+    type: actor.type,
+    net_id: actor.net_id,
+    pos: [actor.body.position.x, actor.body.position.y],
+    vel: [actor.body.velocity.x, actor.body.velocity.y],
+    state: {
+      width: actor.state.width,
+      player_id: actor.state.player_id,
+      lives: actor.state.lives,
+      score: actor.state.score,
+      deaths: actor.state.deaths,
+      on_ground: actor.state.on_ground,
+      hit_count: actor.state.hit_count
+    }
+  };
+}
 
 class PhysicsGame {
   constructor() {
@@ -252,7 +321,12 @@ class PhysicsGame {
         const dir = actor.state.patrol_dir;
         actor.body.velocity.x = dir * actor.state.speed;
 
-        if (actor.body.position.x <= 0 || actor.body.position.x >= 1280) {
+        const minBound = 50;
+        const maxBound = 1230;
+        const turnDistance = 30;
+
+        if ((actor.body.position.x < minBound + turnDistance && dir < 0) ||
+            (actor.body.position.x > maxBound - turnDistance && dir > 0)) {
           actor.state.patrol_dir *= -1;
         }
       }
@@ -405,30 +479,17 @@ class PhysicsGame {
   }
 
   broadcastGoalReached(playerId) {
-    this.broadcastToClients({ type: 'goal', playerId, stage: this.stage });
+    const msg = buildGoalMessage(playerId, this.stage);
+    this.broadcastToClients(msg);
   }
 
   broadcastStateUpdate(version) {
-    const update = { type: 'update', version, frame: this.frame, stage: this.stage, actors: {} };
+    const actors = {};
     for (const [name, actor] of this.actors) {
-      update.actors[name] = {
-        pos: [actor.body.position.x, actor.body.position.y],
-        vel: [actor.body.velocity.x, actor.body.velocity.y],
-        state: {
-          on_ground: actor.state.on_ground,
-          width: actor.state.width,
-          player_id: actor.state.player_id,
-          lives: actor.state.lives,
-          score: actor.state.score,
-          deaths: actor.state.deaths,
-          respawn_time: actor.state.respawn_time,
-          invulnerable: actor.state.invulnerable,
-          hit_count: actor.state.hit_count,
-          stage_time: Math.round(actor.state.stage_time * 10) / 10
-        }
-      };
+      actors[name] = serializeActorState(actor);
     }
-    this.broadcastToClients(update);
+    const msg = buildUpdateMessage(version, this.frame, this.stage, actors);
+    this.broadcastToClients(msg);
   }
 
   serializeActor(actor) {
@@ -451,7 +512,15 @@ class PhysicsGame {
   }
 
   broadcastToClients(message) {
-    const msg = typeof message === 'string' ? message : JSON.stringify(message);
+    let msg;
+    if (Array.isArray(message)) {
+      msg = msgpack.pack(message);
+    } else if (typeof message === 'string') {
+      msg = message;
+    } else {
+      msg = msgpack.pack(message);
+    }
+
     this.clients.forEach((client) => {
       if (client && client.ws && client.ws.readyState === WebSocket.OPEN) {
         try {
@@ -473,16 +542,11 @@ class PhysicsGame {
         this.spawn('player', spawnPos, { player_id: client.playerId });
       });
 
-      const msg = JSON.stringify({
-        type: 'stageload',
-        stage: this.stage,
-        levelName: this.level.name,
-        goal: this.level.goal,
-        actors: Array.from(this.actors.values()).map(a => this.serializeActor(a))
-      });
+      const actors = Array.from(this.actors.values()).map(a => serializeActorFull(a));
+      const msg = buildStageloadMessage(this.stage, this.level.name, this.level.goal, actors);
       this.clients.forEach((client) => {
         if (client.ws.readyState === WebSocket.OPEN) {
-          client.ws.send(msg);
+          client.ws.send(msgpack.pack(msg));
         }
       });
     }
@@ -506,16 +570,9 @@ wss.on('connection', (ws) => {
   const client = { ws, playerId };
   game.clients.set(playerId, client);
 
-  const initMsg = JSON.stringify({
-    type: 'init',
-    playerId,
-    stage: game.stage,
-    levelName: game.level.name,
-    goal: game.level.goal,
-    frame: game.frame,
-    actors: Array.from(game.actors.values()).map(a => game.serializeActor(a))
-  });
-  ws.send(initMsg);
+  const actors = Array.from(game.actors.values()).map(a => serializeActorFull(a));
+  const initMsg = buildInitMessage(playerId, game.stage, game.level.name, game.level.goal, game.frame, actors);
+  ws.send(msgpack.pack(initMsg));
 
   ws.on('message', (msg) => {
     try {
