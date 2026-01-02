@@ -204,7 +204,7 @@ class PhysicsGame {
         player_id: extra.player_id,
         speed: extra.speed || (type === 'player' ? PHYSICS.PLAYER_SPEED : PHYSICS.ENEMY_SPEED),
         patrol_dir: extra.patrol_dir || -1,
-        on_ground: false,
+        on_ground: type === "player" ? true : false,
         hit_count: 0,
         max_hits: extra.max_hits || 3,
         width: extra.width || 32,
@@ -300,7 +300,7 @@ class PhysicsGame {
 
   getSpawnPosition(playerId) {
     const baseX = 500 + (playerId - 1) * 50;
-    const baseY = 640;
+    const baseY = 656;
     const searchRadius = 100;
 
     for (let radius = 0; radius < searchRadius; radius += 20) {
@@ -471,8 +471,9 @@ class PhysicsGame {
             const prevPlayerBottom = prevY + playerHH;
             const playerBottom = movingBody.position.y + playerHH;
             const landingFromAbove = movingBody.velocity.y > 0 && prevPlayerBottom < platformTop && playerBottom >= platformTop;
+            const restingOnPlatform = movingBody.velocity.y <= 0 && playerBottom > platformTop - 2 && playerBottom < platformBot + 2;
 
-            if (landingFromAbove) {
+            if (landingFromAbove || restingOnPlatform) {
               if (movingActor.type === 'player') {
                 console.error(`[LAND] Player landed on ${platformActor.name} at Y ${movingBody.position.y.toFixed(1)}`);
               }
@@ -579,7 +580,7 @@ class PhysicsGame {
       this.loadStage(this.stage);
       this.stage_over = false;
       this.clients.forEach((client) => {
-        const spawnPos = [500 + (client.playerId - 1) * 50, 640];
+        const spawnPos = [500 + (client.playerId - 1) * 50,656];
         this.spawn('player', spawnPos, { player_id: client.playerId });
       });
     }
@@ -687,7 +688,7 @@ class PhysicsGame {
       this.paused = false;
       this.loadStage(this.stage + 1);
       this.clients.forEach((client) => {
-        const spawnPos = [500 + (client.playerId - 1) * 50, 640];
+        const spawnPos = [500 + (client.playerId - 1) * 50,656];
         this.spawn('player', spawnPos, { player_id: client.playerId });
       });
 
@@ -727,7 +728,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 wss.on('connection', (ws) => {
   const playerId = nextPlayerId++;
-  const spawnPos = [500 + (playerId - 1) * 50, 640];
+  const spawnPos = [500 + (playerId - 1) * 50,656];
   game.spawn('player', spawnPos, { player_id: playerId });
 
   const client = { ws, playerId };
