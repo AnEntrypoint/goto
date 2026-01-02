@@ -190,6 +190,8 @@ class PhysicsGame {
       collisionFilter: { category: type === 'player' ? 1 : 2 },
       circleRadius: Math.max(width, height) / 2
     });
+    body._width = width;
+    body._height = height;
 
     World.add(this.engine.world, body);
 
@@ -397,10 +399,14 @@ class PhysicsGame {
         const bodyB = actorB.body;
 
         const aabbHits = this.checkAABB(bodyA, bodyB);
-        if (actorA.type === 'player' && actorB.type === 'platform' && aabbHits) {
-          const vy = bodyA.velocity.y;
-          const yCheck = bodyA.position.y + 16 < bodyB.position.y + 8;
-          console.error(`[CHECK] Player vs ${actorB.name}: vy=${vy.toFixed(1)}, dy_check=${yCheck} (player_y+16=${(bodyA.position.y + 16).toFixed(1)} < platform_y+8=${(bodyB.position.y + 8).toFixed(1)})`);
+        if (actorA.type === 'player' && actorB.name === 'platform_1' && this.frame < 20) {
+          const dx = Math.abs(bodyA.position.x - bodyB.position.x);
+          const dy = Math.abs(bodyA.position.y - bodyB.position.y);
+          const aW = (bodyA._width || 32) / 2;
+          const aH = (bodyA._height || 32) / 2;
+          const bW = (bodyB._width || 32) / 2;
+          const bH = (bodyB._height || 16) / 2;
+          console.error(`[AABB-${this.frame}] player@(${bodyA.position.x.toFixed(0)},${bodyA.position.y.toFixed(0)}) vs plat@(${bodyB.position.x.toFixed(0)},${bodyB.position.y.toFixed(0)}) | dx=${dx.toFixed(1)}<${(aW+bW).toFixed(1)}? dy=${dy.toFixed(1)}<${(aH+bH).toFixed(1)}? hit=${aabbHits}`);
         }
 
         if (aabbHits) {
@@ -416,7 +422,10 @@ class PhysicsGame {
           }
 
           if ((actorA.type === 'player' || actorA.type === 'enemy') && (actorB.type === 'platform' || actorB.type === 'breakable_platform')) {
-            if (bodyA.velocity.y > 0 && bodyA.position.y + 16 < bodyB.position.y + 8) {
+            const prevY = bodyA._prevPos?.y || bodyA.position.y;
+            const landingFromAbove = bodyA.velocity.y > 0 && prevY + 16 <= bodyB.position.y + 8 && bodyA.position.y + 16 >= bodyB.position.y - 8;
+
+            if (landingFromAbove) {
               if (actorA.type === 'player') {
                 console.error(`[LAND] Player landed on ${actorB.name} at Y ${bodyA.position.y.toFixed(1)}`);
               }
@@ -454,11 +463,13 @@ class PhysicsGame {
   }
 
   checkAABB(bodyA, bodyB) {
-    const aMin = Math.sqrt(2) * bodyA.circleRadius || 16;
-    const bMin = Math.sqrt(2) * bodyB.circleRadius || 16;
+    const aHalfW = (bodyA._width || 32) / 2;
+    const aHalfH = (bodyA._height || 32) / 2;
+    const bHalfW = (bodyB._width || 32) / 2;
+    const bHalfH = (bodyB._height || 16) / 2;
     const dx = Math.abs(bodyA.position.x - bodyB.position.x);
     const dy = Math.abs(bodyA.position.y - bodyB.position.y);
-    return dx < aMin + bMin && dy < aMin + bMin;
+    return dx < aHalfW + bHalfW && dy < aHalfH + bHalfH;
   }
 
   checkGoal() {
