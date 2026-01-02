@@ -190,6 +190,7 @@ class PhysicsGame {
     this.paused = false;
     this.pausedPlayers = new Set();
     this.lastActorState = new Map();
+    this.stage_transitioning = false;
     this.loadStage(1);
   }
 
@@ -349,7 +350,8 @@ class PhysicsGame {
   processPendingInput() {
     for (const [playerId, input] of this.pendingInput) {
       if (input.action === 'move') {
-        const dir = input.direction || 0;
+        const rawDir = input.direction || 0;
+        const dir = typeof rawDir === 'number' ? (rawDir > 0 ? 1 : rawDir < 0 ? -1 : 0) : 0;
         if (dir === 0) {
           this.heldInput.delete(playerId);
           const actor = this.playerActors.get(playerId);
@@ -372,8 +374,11 @@ class PhysicsGame {
       const actor = this.playerActors.get(playerId);
       if (!actor) continue;
       if (input.action === 'move') {
-        const vel = input.direction * actor.state.speed;
-        actor.body.velocity.x = vel;
+        const dir = input.direction || 0;
+        if (typeof dir === 'number') {
+          const vel = dir * actor.state.speed;
+          actor.body.velocity.x = vel;
+        }
       }
     }
   }
@@ -448,17 +453,17 @@ class PhysicsGame {
         }
       }
 
-      if ((actor.type === 'player' || actor.type === 'enemy') && !actor.state.on_ground) {
+      if (actor.type === 'player' || actor.type === 'enemy') {
         actor.body.velocity.y = Math.min(
           actor.body.velocity.y + PHYSICS.GRAVITY * (TICK_MS / 1000),
           PHYSICS.MAX_FALL_SPEED
         );
+        if (actor.state._coyote_counter < 6) {
+          actor.state._coyote_counter++;
+        }
       }
 
       actor.state._landed_this_frame = false;
-      if (actor.state._coyote_counter < 6) {
-        actor.state._coyote_counter++;
-      }
 
       if (actor.body.position.y > 750) {
         actor.state.removed = true;
@@ -567,6 +572,11 @@ class PhysicsGame {
         actor.state.on_ground = contactList.length > 0;
       }
     }
+    for (const [name, actor] of this.actors) {
+      if ((actor.type === 'player' || actor.type === 'enemy') && !contactingPlatforms.has(name)) {
+        actor.state.on_ground = false;
+      }
+    }
   }
 
   checkAABB(bodyA, bodyB) {
@@ -642,6 +652,8 @@ class PhysicsGame {
   }
 
   broadcastGoalReached(playerId) {
+    if (this.stage_transitioning) return;
+
     const msg = buildGoalMessage(playerId, this.stage);
     this.broadcastToClients(msg);
 
@@ -653,7 +665,11 @@ class PhysicsGame {
         this.broadcastToClients(winMsg);
       }, 1000);
     } else {
-      setTimeout(() => this.nextStage(), 3000);
+      this.stage_transitioning = true;
+      setTimeout(() => {
+        this.nextStage();
+        this.stage_transitioning = false;
+      }, 3000);
     }
   }
 
