@@ -468,6 +468,7 @@ class PhysicsGame {
 
   updateActors() {
     for (const [name, actor] of this.actors) {
+      if (actor.state.removed) continue;
       if (actor.type === 'enemy') {
         const dir = actor.state.patrol_dir;
         actor.body.velocity.x = dir * actor.state.speed;
@@ -519,6 +520,7 @@ class PhysicsGame {
     for (const [nameA, actorA] of this.actors) {
       for (const [nameB, actorB] of this.actors) {
         if (nameA === nameB) continue;
+        if (actorA.state.removed || actorB.state.removed) continue;
 
         const pairKey = [nameA, nameB].sort().join('|');
         if (checked.has(pairKey)) continue;
@@ -637,7 +639,7 @@ class PhysicsGame {
   checkGoal() {
     if (!this.level.goal) return;
     for (const [_, actor] of this.actors) {
-      if (actor.type === 'player' && !actor.state._goal_reached) {
+      if (actor.type === 'player' && !actor.state._goal_reached && !actor.state.removed && actor.body) {
         const dist = Math.hypot(actor.body.position.x - this.level.goal.x, actor.body.position.y - this.level.goal.y);
         if (dist < 40) {
           actor.state._goal_reached = true;
