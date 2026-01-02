@@ -222,17 +222,28 @@ class GameClient {
       for (const name in data.actors) {
         if (this.actors.has(name)) {
           const actor = this.actors.get(name);
+          const delta = data.actors[name];
           const lastState = this.lastActorState.get(name) || {};
-          const newState = data.actors[name].state || {};
 
-          if (Array.isArray(data.actors[name].pos)) actor.pos = [...data.actors[name].pos];
-          if (Array.isArray(data.actors[name].vel)) actor.vel = [...data.actors[name].vel];
-          if (data.actors[name].state && typeof data.actors[name].state === 'object') {
-            actor.state = { ...data.actors[name].state };
-          }
+          if (delta.x !== undefined) actor.pos[0] = delta.x;
+          if (delta.y !== undefined) actor.pos[1] = delta.y;
+          if (delta.vx !== undefined) actor.vel[0] = delta.vx;
+          if (delta.vy !== undefined) actor.vel[1] = delta.vy;
 
+          const newState = {};
+          if (delta.w !== undefined) newState.width = delta.w;
+          if (delta.p !== undefined) newState.player_id = delta.p;
+          if (delta.l !== undefined) newState.lives = delta.l;
+          if (delta.s !== undefined) newState.score = delta.s;
+          if (delta.d !== undefined) newState.deaths = delta.d;
+          if (delta.rt !== undefined) newState.respawn_time = delta.rt;
+          if (delta.iv !== undefined) newState.invulnerable = delta.iv;
+          if (delta.og !== undefined) newState.on_ground = delta.og;
+          if (delta.hc !== undefined) newState.hit_count = delta.hc;
+
+          Object.assign(actor.state, newState);
           this.detectStateChanges(actor, lastState, newState);
-          this.lastActorState.set(name, { ...newState });
+          this.lastActorState.set(name, Object.assign({}, lastState, newState));
         }
       }
     }

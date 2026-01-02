@@ -88,6 +88,19 @@ function serializeActorFull(actor) {
   };
 }
 
+function serializeActorDelta(actor, lastState) {
+  const current = serializeActorState(actor);
+  if (!lastState) return current;
+
+  const delta = {};
+  for (const key in current) {
+    if (JSON.stringify(current[key]) !== JSON.stringify(lastState[key])) {
+      delta[key] = current[key];
+    }
+  }
+  return Object.keys(delta).length > 0 ? delta : null;
+}
+
 class PhysicsGame {
   constructor() {
     this.engine = Engine.create();
@@ -105,6 +118,7 @@ class PhysicsGame {
     this.contacts = new Map();
     this.paused = false;
     this.pausedPlayers = new Set();
+    this.lastActorState = new Map();
     this.loadStage(1);
   }
 
@@ -486,7 +500,13 @@ class PhysicsGame {
   broadcastStateUpdate(version) {
     const actors = {};
     for (const [name, actor] of this.actors) {
-      actors[name] = serializeActorState(actor);
+      const delta = serializeActorDelta(actor, this.lastActorState.get(name));
+      if (delta) {
+        actors[name] = delta;
+      }
+    }
+    for (const [name, actor] of this.actors) {
+      this.lastActorState.set(name, serializeActorState(actor));
     }
     const msg = buildUpdateMessage(version, this.frame, this.stage, actors);
     this.broadcastToClients(msg);
