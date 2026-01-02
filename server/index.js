@@ -925,10 +925,9 @@ wss.on('connection', (ws) => {
       const { action, direction } = data;
 
       if (action === 'move') {
-        if (typeof direction === 'number') {
-          const dir = direction > 0 ? 1 : direction < 0 ? -1 : 0;
-          game.pendingInput.set(playerId, { action: 'move', direction: dir });
-        }
+        if (typeof direction !== 'number') return;
+        const dir = direction > 0 ? 1 : direction < 0 ? -1 : 0;
+        game.pendingInput.set(playerId, { action: 'move', direction: dir });
       } else if (action === 'jump') {
         game.pendingInput.set(playerId, { action: 'jump' });
       } else if (action === 'nextstage') {
