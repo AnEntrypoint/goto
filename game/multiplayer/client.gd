@@ -4,9 +4,15 @@ var ws: WebSocketPeer
 var actors: Dictionary = {}
 var local_player_id: int = 0
 var debug_text: String = "Connecting..."
+var held_keys: Dictionary = {"left": false, "right": false}
+var camera: Camera2D
 
 func _ready() -> void:
 	set_process(true)
+	camera = Camera2D.new()
+	camera.global_position = Vector2(640, 360)
+	add_child(camera)
+	make_current()
 	ws = WebSocketPeer.new()
 	ws.connect_to_url("ws://%s:%d" % [Constants.SERVER_HOST, Constants.SERVER_PORT])
 
@@ -24,11 +30,13 @@ func _process(_delta: float) -> void:
 			if packet.size() > 0:
 				var msg = packet.get_string_from_utf8()
 				handle_msg(msg)
+		send_input_state()
 	elif state == WebSocketPeer.STATE_CONNECTING:
 		debug_text = "Connecting..."
 	elif state == WebSocketPeer.STATE_CLOSED:
 		debug_text = "Disconnected"
 
+	update_camera()
 	queue_redraw()
 
 func handle_msg(text: String) -> void:
@@ -89,7 +97,7 @@ func _draw() -> void:
 		draw_rect(Rect2(pos - Vector2(size/2.0, size/2.0), Vector2(size, size)), Color.BLACK, false, 2.0)
 
 func _unhandled_input(event: InputEvent) -> void:
-	if not event is InputEventKey or not event.pressed:
+	if not event is InputEventKey:
 		return
 
 	if ws == null or ws.get_ready_state() != WebSocketPeer.STATE_OPEN:
@@ -97,11 +105,31 @@ func _unhandled_input(event: InputEvent) -> void:
 
 	match event.keycode:
 		KEY_A, KEY_LEFT:
-			ws.send_text(JSON.stringify({"action": "move", "direction": -1.0}))
+			held_keys["left"] = event.pressed
 		KEY_D, KEY_RIGHT:
-			ws.send_text(JSON.stringify({"action": "move", "direction": 1.0}))
+			held_keys["right"] = event.pressed
 		KEY_W, KEY_SPACE, KEY_UP:
-			ws.send_text(JSON.stringify({"action": "jump"}))
+			if event.pressed:
+				ws.send_text(JSON.stringify({"action": "jump"}))
 		KEY_R:
 			if Input.is_key_pressed(KEY_CTRL):
 				get_tree().reload_current_scene()
+
+func send_input_state() -> void:
+	var dir = 0.0
+	if held_keys["right"]:
+		dir = 1.0
+	elif held_keys["left"]:
+		dir = -1.0
+	ws.send_text(JSON.stringify({"action": "move", "direction": dir}))
+
+func update_camera() -> void:
+	var player_key = "player_%d" % local_player_id
+	var player = actors.get(player_key)
+	if player == null:
+		return
+	var pos_arr = player.get("pos")
+	if pos_arr == null or pos_arr.size() < 2:
+		return
+	var target_y = float(pos_arr[1]) - 200.0
+	camera.global_position.y = lerp(camera.global_position.y, target_y, 0.1)
