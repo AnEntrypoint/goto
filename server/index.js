@@ -478,7 +478,6 @@ class PhysicsGame {
                 console.error(`[LAND] Player landed on ${platformActor.name} at Y ${movingBody.position.y.toFixed(1)}`);
               }
               movingBody.velocity.y = 0;
-              movingBody.position.y = platformBody.position.y - (movingBody._height || 32) / 2 - (platformBody._height || 16) / 2;
               movingActor.state._coyote_counter = 0;
 
               // Track contact for on_ground determination
