@@ -466,7 +466,10 @@ class PhysicsGame {
           if (movingActor && platformActor) {
             const prevY = movingBody._prevPos?.y || movingBody.position.y;
             const platformTop = platformBody.position.y - (platformBody._height || 16) / 2;
+            const platformBot = platformBody.position.y + (platformBody._height || 16) / 2;
+            const playerTop = movingBody.position.y - (movingBody._height || 32) / 2;
             const playerBottom = movingBody.position.y + (movingBody._height || 32) / 2;
+            const prevPlayerTop = prevY - (movingBody._height || 32) / 2;
             const prevPlayerBottom = prevY + (movingBody._height || 32) / 2;
             const landingFromAbove = movingBody.velocity.y > 0 && prevPlayerBottom <= platformTop && playerBottom >= platformTop;
 
@@ -517,15 +520,17 @@ class PhysicsGame {
     const bHalfW = (bodyB._width || 32) / 2;
     const bHalfH = (bodyB._height || 16) / 2;
     const prevPosA = bodyA._prevPos || bodyA.position;
-    const aMinX = Math.min(prevPosA.x, bodyA.position.x) - aHalfW;
-    const aMaxX = Math.max(prevPosA.x, bodyA.position.x) + aHalfW;
-    const aMinY = Math.min(prevPosA.y, bodyA.position.y) - aHalfH;
-    const aMaxY = Math.max(prevPosA.y, bodyA.position.y) + aHalfH;
-    const bMinX = bodyB.position.x - bHalfW;
-    const bMaxX = bodyB.position.x + bHalfW;
-    const bMinY = bodyB.position.y - bHalfH;
-    const bMaxY = bodyB.position.y + bHalfH;
-    return !(aMaxX < bMinX || aMinX > bMaxX || aMaxY < bMinY || aMinY > bMaxY);
+    const aTop = Math.min(prevPosA.y, bodyA.position.y) - aHalfH;
+    const aBot = Math.max(prevPosA.y, bodyA.position.y) + aHalfH;
+    const aLeft = Math.min(prevPosA.x, bodyA.position.x) - aHalfW;
+    const aRight = Math.max(prevPosA.x, bodyA.position.x) + aHalfW;
+    const bTop = bodyB.position.y - bHalfH;
+    const bBot = bodyB.position.y + bHalfH;
+    const bLeft = bodyB.position.x - bHalfW;
+    const bRight = bodyB.position.x + bHalfW;
+    const xOverlap = aRight >= bLeft && aLeft <= bRight;
+    const yOverlap = aBot >= bTop && aTop <= bBot;
+    return xOverlap && yOverlap;
   }
 
   checkGoal() {
@@ -575,7 +580,7 @@ class PhysicsGame {
       this.loadStage(this.stage);
       this.stage_over = false;
       this.clients.forEach((client) => {
-        const spawnPos = [500 + (client.playerId - 1) * 50, 664];
+        const spawnPos = [500 + (client.playerId - 1) * 50, 640];
         this.spawn('player', spawnPos, { player_id: client.playerId });
       });
     }
@@ -683,7 +688,7 @@ class PhysicsGame {
       this.paused = false;
       this.loadStage(this.stage + 1);
       this.clients.forEach((client) => {
-        const spawnPos = [500 + (client.playerId - 1) * 50, 664];
+        const spawnPos = [500 + (client.playerId - 1) * 50, 640];
         this.spawn('player', spawnPos, { player_id: client.playerId });
       });
 
@@ -723,7 +728,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 wss.on('connection', (ws) => {
   const playerId = nextPlayerId++;
-  const spawnPos = [500 + (playerId - 1) * 50, 664];
+  const spawnPos = [500 + (playerId - 1) * 50, 640];
   game.spawn('player', spawnPos, { player_id: playerId });
 
   const client = { ws, playerId };
