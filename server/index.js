@@ -395,6 +395,8 @@ class PhysicsGame {
 
   checkCollisions() {
     const checked = new Set();
+    let checkCount = 0;
+    let hitCount = 0;
 
     for (const [nameA, actorA] of this.actors) {
       actorA.state._landed_this_frame = false;
@@ -405,6 +407,7 @@ class PhysicsGame {
         const pairKey = [nameA, nameB].sort().join('|');
         if (checked.has(pairKey)) continue;
         checked.add(pairKey);
+        checkCount++;
 
         const bodyA = actorA.body;
         const bodyB = actorB.body;
@@ -421,6 +424,7 @@ class PhysicsGame {
         }
 
         if (aabbHits) {
+          hitCount++;
           if (this.frame % 60 === 0) {
             console.error(`[HIT] ${nameA} collided with ${nameB}`);
           }
@@ -490,6 +494,10 @@ class PhysicsGame {
       if (!actorA.state._landed_this_frame && (actorA.type === 'player' || actorA.type === 'enemy')) {
         actorA.state.on_ground = false;
       }
+    }
+
+    if (this.frame % 120 === 0) {
+      console.error(`[COLLISION-STATS] Checked ${checkCount} pairs, ${hitCount} hits, actors=${this.actors.size}`);
     }
   }
 
