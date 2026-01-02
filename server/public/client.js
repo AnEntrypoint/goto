@@ -9,6 +9,37 @@ const particles = new ParticleSystem();
 const sprites = new SpriteRenderer();
 const sound = new SoundManager();
 
+class FloatingNumber {
+  constructor(value, x, y) {
+    this.value = value;
+    this.x = x;
+    this.y = y;
+    this.life = 1.5;
+    this.alpha = 1.0;
+  }
+
+  update(dt) {
+    this.life -= dt;
+    this.alpha = Math.max(0, this.life / 1.5);
+    this.y -= 50 * dt;
+  }
+
+  render(ctx) {
+    ctx.save();
+    ctx.globalAlpha = this.alpha;
+    ctx.fillStyle = '#FFFF00';
+    ctx.font = 'bold 20px Arial';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`+${this.value}`, this.x, this.y);
+    ctx.restore();
+  }
+
+  isAlive() {
+    return this.life > 0;
+  }
+}
+
 class Camera {
   constructor() {
     this.x = 0;
@@ -62,6 +93,10 @@ class GameClient {
     this.goal = null;
     this.lastActorState = new Map();
     this.debugMode = false;
+    this.paused = false;
+    this.screenFlash = 0;
+    this.screenFlashColor = [0, 0, 0];
+    this.floatingNumbers = [];
 
     this.connect();
     this.setupInput();
@@ -71,16 +106,20 @@ class GameClient {
   connect() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const url = `${protocol}//${window.location.host}`;
+    this.reconnectAttempts = 0;
+    this.maxReconnectAttempts = 5;
 
     const connectTimeout = setTimeout(() => {
       console.error('Connection timeout');
-      info.textContent = 'Connection timeout';
+      info.textContent = 'Connection timeout - retrying...';
+      this.attemptReconnect();
     }, 10000);
 
     this.ws = new WebSocket(url);
     this.ws.addEventListener('open', () => clearTimeout(connectTimeout));
 
     this.ws.onopen = () => {
+      this.reconnectAttempts = 0;
       info.textContent = 'Connected!';
     };
 
@@ -94,12 +133,25 @@ class GameClient {
     };
 
     this.ws.onclose = () => {
-      info.textContent = 'Disconnected';
+      info.textContent = 'Disconnected - reconnecting...';
+      this.attemptReconnect();
     };
 
     this.ws.onerror = (err) => {
       console.error('WebSocket error:', err);
+      this.attemptReconnect();
     };
+  }
+
+  attemptReconnect() {
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      info.textContent = 'Connection lost. Please reload the page.';
+      return;
+    }
+    this.reconnectAttempts++;
+    const delayMs = Math.min(1000 * Math.pow(2, this.reconnectAttempts), 10000);
+    console.error(`Attempting reconnect ${this.reconnectAttempts}/${this.maxReconnectAttempts} in ${delayMs}ms`);
+    setTimeout(() => this.connect(), delayMs);
   }
 
   handleMessage(msg) {
@@ -134,6 +186,7 @@ class GameClient {
               const newState = msg.actors[name].state || {};
 
               if (Array.isArray(msg.actors[name].pos)) actor.pos = [...msg.actors[name].pos];
+              if (Array.isArray(msg.actors[name].vel)) actor.vel = [...msg.actors[name].vel];
               if (msg.actors[name].state && typeof msg.actors[name].state === 'object') {
                 actor.state = { ...msg.actors[name].state };
               }
@@ -176,6 +229,7 @@ class GameClient {
       name: data.name,
       type: data.type,
       pos: [...data.pos],
+      vel: Array.isArray(data.vel) ? [...data.vel] : [0, 0],
       state: data.state ? { ...data.state } : {}
     });
   }
@@ -203,6 +257,20 @@ class GameClient {
       } else if (wasGrounded && isAirborne && Math.abs(newState.vel_y) > 5) {
         particles.emit('jump', actor.pos[0], actor.pos[1]);
         sound.playJump();
+      }
+
+      const lastScore = lastState.score || 0;
+      const newScore = newState.score || 0;
+      if (newScore > lastScore) {
+        const scoreDiff = newScore - lastScore;
+        this.floatingNumbers.push(new FloatingNumber(scoreDiff, actor.pos[0], actor.pos[1]));
+      }
+
+      const lastLives = lastState.lives || 3;
+      const newLives = newState.lives || 3;
+      if (newLives < lastLives) {
+        this.screenFlash = 0.8;
+        this.screenFlashColor = [255, 0, 0];
       }
     } else if (actor.type === 'breakable_platform') {
       const lastHits = lastState.hit_count || 0;
@@ -255,6 +323,15 @@ class GameClient {
         sound.sfxEnabled = !sound.sfxEnabled;
         info.textContent = `SFX: ${sound.sfxEnabled ? 'ON' : 'OFF'}`;
       }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        this.paused = !this.paused;
+      }
+      if (e.key === 'r' || e.key === 'R') {
+        if (this.goalReached) {
+          this.sendInput('nextstage');
+        }
+      }
     });
   }
 
@@ -281,39 +358,63 @@ class GameClient {
     ctx.fillStyle = '#87CEEB';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    ctx.save();
-    this.camera.apply(ctx);
+    if (!this.paused) {
+      ctx.save();
+      this.camera.apply(ctx);
 
-    const actors = Array.from(this.actors.values()).sort((a, b) => {
-      const order = { platform: 1, breakable_platform: 2, enemy: 3, player: 4 };
-      return (order[a.type] || 0) - (order[b.type] || 0);
-    });
+      const actors = Array.from(this.actors.values()).sort((a, b) => {
+        const order = { platform: 1, breakable_platform: 2, enemy: 3, player: 4 };
+        return (order[a.type] || 0) - (order[b.type] || 0);
+      });
 
-    for (const actor of actors) {
-      this.renderActor(actor);
+      for (const actor of actors) {
+        this.renderActor(actor);
+      }
+
+      if (!this.goalReached && this.goal) {
+        const pulse = Math.sin(this.frame * 0.05) * 0.3 + 0.7;
+        ctx.fillStyle = '#FFD700';
+        ctx.beginPath();
+        ctx.arc(this.goal.x, this.goal.y, 15 * pulse, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#FFA500';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      particles.update(1 / 60);
+      particles.render(ctx);
+
+      for (let i = this.floatingNumbers.length - 1; i >= 0; i--) {
+        const fn = this.floatingNumbers[i];
+        fn.update(1 / 60);
+        fn.render(ctx);
+        if (!fn.isAlive()) {
+          this.floatingNumbers.splice(i, 1);
+        }
+      }
+
+      ctx.restore();
     }
 
-    if (!this.goalReached && this.goal) {
-      const pulse = Math.sin(this.frame * 0.05) * 0.3 + 0.7;
-      ctx.fillStyle = '#FFD700';
-      ctx.beginPath();
-      ctx.arc(this.goal.x, this.goal.y, 15 * pulse, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = '#FFA500';
-      ctx.lineWidth = 2;
-      ctx.stroke();
+    this.screenFlash *= 0.95;
+    if (this.screenFlash > 0.01) {
+      ctx.fillStyle = `rgba(${this.screenFlashColor[0]}, ${this.screenFlashColor[1]}, ${this.screenFlashColor[2]}, ${this.screenFlash})`;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
     }
-
-    particles.update(1 / 60);
-    particles.render(ctx);
-
-    ctx.restore();
 
     this.renderUI();
   }
 
   renderActor(actor) {
-    const [x, y] = actor.pos;
+    let [x, y] = actor.pos;
+    const vel = actor.vel || [0, 0];
+
+    if (actor.type === 'player' || actor.type === 'enemy') {
+      x += vel[0] * (1 / 60);
+      y += vel[1] * (1 / 60);
+    }
+
     const w = actor.state.width || 32;
     const h = (actor.type === 'platform' || actor.type === 'breakable_platform') ? 16 : 32;
 
@@ -332,38 +433,135 @@ class GameClient {
     }
   }
 
+  getLocalPlayer() {
+    return Array.from(this.actors.values()).find(a => a.state && a.state.player_id === this.playerId && a.type === 'player');
+  }
+
   renderUI() {
+    const player = this.getLocalPlayer();
+
     ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-    ctx.fillRect(0, 0, 380, 80);
+    ctx.fillRect(0, 0, 500, 100);
 
     ctx.fillStyle = '#FFFFFF';
     ctx.font = 'bold 16px Arial';
     ctx.textAlign = 'left';
     ctx.textBaseline = 'top';
     ctx.fillText(`Stage ${this.stage}: ${this.levelName}`, 10, 10);
-    ctx.fillText(`Player ${this.playerId}`, 10, 30);
-    ctx.fillText(`Frame: ${this.frame}`, 10, 50);
+    ctx.fillText(`Player ${this.playerId} | Score: ${player?.state.score || 0}`, 10, 30);
+    const livesDisplay = player ? '❤'.repeat(Math.max(0, player.state.lives)) : '❤❤❤';
+    ctx.fillText(`Lives: ${livesDisplay} | Time: ${(player?.state.stage_time || 0).toFixed(1)}s`, 10, 50);
+    ctx.fillText(`Frame: ${this.frame}`, 10, 70);
+
+    if (player && player.state.respawn_time > 0 && !this.goalReached) {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = '#FF6666';
+      ctx.font = 'bold 36px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('ELIMINATED', canvas.width / 2, canvas.height / 2 - 40);
+
+      const countdown = Math.ceil(player.state.respawn_time);
+      ctx.font = 'bold 48px Arial';
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillText(countdown, canvas.width / 2, canvas.height / 2 + 40);
+    }
+
+    if (player && player.state.lives <= 0 && !this.goalReached) {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = '#FF0000';
+      ctx.font = 'bold 48px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2 - 60);
+
+      ctx.font = '24px Arial';
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillText(`Final Score: ${player.state.score}`, canvas.width / 2, canvas.height / 2 + 20);
+      ctx.fillText('Reloading...', canvas.width / 2, canvas.height / 2 + 60);
+    }
 
     if (this.goalReached) {
       ctx.fillStyle = 'rgba(255, 215, 0, 0.9)';
-      ctx.fillRect(canvas.width / 2 - 150, canvas.height / 2 - 50, 300, 100);
+      ctx.fillRect(canvas.width / 2 - 200, canvas.height / 2 - 80, 400, 160);
       ctx.fillStyle = '#000000';
       ctx.font = 'bold 32px Arial';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText('STAGE CLEAR!', canvas.width / 2, canvas.height / 2 - 10);
+      ctx.fillText('STAGE CLEAR!', canvas.width / 2, canvas.height / 2 - 30);
+
+      ctx.font = '20px Arial';
+      ctx.fillText(`Score: ${player?.state.score || 0}`, canvas.width / 2, canvas.height / 2 + 20);
+      ctx.fillText(`Time: ${(player?.state.stage_time || 0).toFixed(1)}s`, canvas.width / 2, canvas.height / 2 + 50);
 
       if (this.stage < 4) {
         ctx.font = '14px Arial';
-        ctx.fillText('Next stage in 3 seconds...', canvas.width / 2, canvas.height / 2 + 25);
+        ctx.fillText('Next stage in 3 seconds... (Press R to skip)', canvas.width / 2, canvas.height / 2 + 90);
         if (this.frame - this.goalTime === 180) {
           this.sendInput('nextstage');
         }
       } else {
         ctx.font = 'bold 20px Arial';
         ctx.fillStyle = '#FFD700';
-        ctx.fillText('GAME COMPLETE!', canvas.width / 2, canvas.height / 2 + 30);
+        ctx.fillText('GAME COMPLETE!', canvas.width / 2, canvas.height / 2 + 90);
       }
+    }
+
+    if (this.paused && !this.goalReached && (!player || player.state.lives > 0)) {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = '#FFFFFF';
+      ctx.font = 'bold 48px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('PAUSED', canvas.width / 2, canvas.height / 2 - 60);
+
+      ctx.font = '20px Arial';
+      ctx.fillText('ESC: Resume | M: Mute | F3: Debug', canvas.width / 2, canvas.height / 2 + 40);
+    }
+
+    if (this.debugMode) {
+      this.renderDebugPanel();
+    }
+  }
+
+  renderDebugPanel() {
+    const player = this.getLocalPlayer();
+    const logs = [];
+
+    logs.push('[PLAYER STATE]');
+    if (player) {
+      logs.push(`pos: [${player.pos[0].toFixed(1)}, ${player.pos[1].toFixed(1)}]`);
+      logs.push(`vel: [${(player.vel?.[0] || 0).toFixed(1)}, ${(player.vel?.[1] || 0).toFixed(1)}]`);
+      logs.push(`on_ground: ${player.state.on_ground}`);
+      logs.push(`lives: ${player.state.lives} | deaths: ${player.state.deaths}`);
+      logs.push(`score: ${player.state.score} | time: ${(player.state.stage_time || 0).toFixed(1)}s`);
+      logs.push(`respawn: ${(player.state.respawn_time || 0).toFixed(1)}s`);
+      logs.push(`invuln: ${(player.state.invulnerable || 0).toFixed(2)}s`);
+    }
+
+    logs.push('[GAME STATE]');
+    logs.push(`frame: ${this.frame} | stage: ${this.stage}`);
+    logs.push(`actors: ${this.actors.size} total`);
+
+    const enemies = Array.from(this.actors.values()).filter(a => a.type === 'enemy').length;
+    const platforms = Array.from(this.actors.values()).filter(a => a.type.includes('platform')).length;
+    logs.push(`enemies: ${enemies} | platforms: ${platforms}`);
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+    ctx.fillRect(canvas.width - 400, 0, 400, logs.length * 18 + 20);
+
+    ctx.fillStyle = '#00FF00';
+    ctx.font = '11px monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    for (let i = 0; i < logs.length; i++) {
+      ctx.fillText(logs[i], canvas.width - 390, 10 + i * 18);
     }
   }
 

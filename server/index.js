@@ -93,7 +93,14 @@ class PhysicsGame {
         removed: false,
         _landed_this_frame: false,
         _pending_jump: false,
-        _coyote_counter: 0
+        _coyote_counter: 0,
+        lives: type === 'player' ? 3 : 0,
+        deaths: 0,
+        respawn_time: 0,
+        invulnerable: 0,
+        score: 0,
+        stage_time: 0,
+        _last_vel_y: 0
       }
     };
 
@@ -113,6 +120,7 @@ class PhysicsGame {
   tick() {
     this.frame++;
     this.processPendingInput();
+    this.updateRespawns();
     this.updateActors();
 
     for (const [name, actor] of this.actors) {
@@ -123,6 +131,7 @@ class PhysicsGame {
 
     this.checkCollisions();
     this.checkGoal();
+    this.updateGameState();
     this.removeDeadActors();
   }
 
@@ -158,6 +167,36 @@ class PhysicsGame {
           console.error(`[INPUT] Player ${playerId}: setting velocity.x = ${vel} (dir=${input.direction}, speed=${actor.state.speed}), body.pos.x=${actor.body.position.x.toFixed(1)}`);
         }
       }
+    }
+  }
+
+  updateRespawns() {
+    for (const [name, actor] of this.actors) {
+      if (actor.type !== 'player') continue;
+
+      if (actor.state.respawn_time > 0) {
+        actor.state.respawn_time -= TICK_MS / 1000;
+        if (this.frame % 30 === 0) {
+          console.error(`[RESPAWN] Player ${actor.state.player_id}: respawn_time=${actor.state.respawn_time.toFixed(1)}s`);
+        }
+
+        if (actor.state.respawn_time <= 0) {
+          const spawnPos = [500 + (actor.state.player_id - 1) * 50, 664];
+          actor.body.position.x = spawnPos[0];
+          actor.body.position.y = spawnPos[1];
+          actor.body.velocity.x = 0;
+          actor.body.velocity.y = 0;
+          actor.state.respawn_time = 0;
+          actor.state.on_ground = true;
+          console.error(`[RESPAWN] Player ${actor.state.player_id} respawned at [${spawnPos[0]}, ${spawnPos[1]}]`);
+        }
+      }
+
+      if (actor.state.invulnerable > 0) {
+        actor.state.invulnerable -= TICK_MS / 1000;
+      }
+
+      actor.state.stage_time += TICK_MS / 1000;
     }
   }
 
@@ -210,7 +249,13 @@ class PhysicsGame {
         if (aabbHits) {
           if (actorB.type === 'enemy' && actorA.type === 'player') {
             console.error(`[COLLISION] Player ${actorA.name} hit by enemy ${actorB.name} at distance dx=${Math.abs(bodyA.position.x - bodyB.position.x).toFixed(1)}, dy=${Math.abs(bodyA.position.y - bodyB.position.y).toFixed(1)}`);
-            actorA.state.removed = true;
+            if (actorA.state.invulnerable <= 0) {
+              actorA.state.deaths++;
+              actorA.state.lives--;
+              actorA.state.respawn_time = 5;
+              actorA.state.invulnerable = 1.5;
+              console.error(`[DEATH] Player ${actorA.state.player_id} died (lives left: ${actorA.state.lives})`);
+            }
           }
 
           if ((actorA.type === 'player' || actorA.type === 'enemy') && (actorB.type === 'platform' || actorB.type === 'breakable_platform')) {
@@ -227,8 +272,13 @@ class PhysicsGame {
               if (actorB.type === 'breakable_platform' && !actorB.state._broken_by) {
                 actorB.state._broken_by = nameA;
                 actorB.state.hit_count++;
+                if (actorA.type === 'player') {
+                  actorA.state.score += 10;
+                  console.error(`[SCORE] Player ${actorA.state.player_id} scored +10 (total: ${actorA.state.score}) for landing on breakable platform`);
+                }
                 if (actorB.state.hit_count >= actorB.state.max_hits) {
                   actorB.state.removed = true;
+                  console.error(`[BREAK] Platform ${actorB.name} broke (hit_count: ${actorB.state.hit_count}/${actorB.state.max_hits})`);
                 }
               }
             }
@@ -275,16 +325,53 @@ class PhysicsGame {
     }
   }
 
+  updateGameState() {
+    const activePlayers = Array.from(this.actors.values())
+      .filter(a => a.type === 'player' && a.state.lives > 0 && a.state.respawn_time <= 0);
+
+    if (activePlayers.length === 0) {
+      const deadPlayers = Array.from(this.actors.values())
+        .filter(a => a.type === 'player');
+      if (deadPlayers.length > 0 && !this.stage_over) {
+        this.stage_over = true;
+        this.stage_over_time = this.frame;
+        console.error(`[GAMEOVER] All players eliminated at frame ${this.frame}`);
+      }
+    }
+
+    if (this.stage_over && this.frame - this.stage_over_time >= 180) {
+      console.error(`[RESTART] Reloading stage ${this.stage} after 3 seconds`);
+      this.loadStage(this.stage);
+      this.stage_over = false;
+      this.clients.forEach((client) => {
+        const spawnPos = [500 + (client.playerId - 1) * 50, 664];
+        this.spawn('player', spawnPos, { player_id: client.playerId });
+      });
+    }
+  }
+
   broadcastGoalReached(playerId) {
     this.broadcastToClients({ type: 'goal', playerId, stage: this.stage });
   }
 
-  broadcastStateUpdate() {
-    const update = { type: 'update', frame: this.frame, stage: this.stage, actors: {} };
+  broadcastStateUpdate(version) {
+    const update = { type: 'update', version, frame: this.frame, stage: this.stage, actors: {} };
     for (const [name, actor] of this.actors) {
       update.actors[name] = {
         pos: [actor.body.position.x, actor.body.position.y],
-        state: { on_ground: actor.state.on_ground, width: actor.state.width, player_id: actor.state.player_id }
+        vel: [actor.body.velocity.x, actor.body.velocity.y],
+        state: {
+          on_ground: actor.state.on_ground,
+          width: actor.state.width,
+          player_id: actor.state.player_id,
+          lives: actor.state.lives,
+          score: actor.state.score,
+          deaths: actor.state.deaths,
+          respawn_time: actor.state.respawn_time,
+          invulnerable: actor.state.invulnerable,
+          hit_count: actor.state.hit_count,
+          stage_time: Math.round(actor.state.stage_time * 10) / 10
+        }
       };
     }
     this.broadcastToClients(update);
@@ -296,7 +383,16 @@ class PhysicsGame {
       type: actor.type,
       net_id: actor.net_id,
       pos: [actor.body.position.x, actor.body.position.y],
-      state: { width: actor.state.width }
+      vel: [actor.body.velocity.x, actor.body.velocity.y],
+      state: {
+        width: actor.state.width,
+        player_id: actor.state.player_id,
+        lives: actor.state.lives,
+        score: actor.state.score,
+        deaths: actor.state.deaths,
+        on_ground: actor.state.on_ground,
+        hit_count: actor.state.hit_count
+      }
     };
   }
 
@@ -342,6 +438,7 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 const game = new PhysicsGame();
 let nextPlayerId = 1;
+let updateVersion = 0;
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -464,11 +561,64 @@ app.get('/api/level/:num', (req, res) => {
   res.json(JSON.parse(fs.readFileSync(filePath, 'utf8')));
 });
 
+app.get('/api/stats', (req, res) => {
+  const players = Array.from(game.playerActors.values()).map(p => ({
+    id: p.state.player_id,
+    score: p.state.score,
+    lives: p.state.lives,
+    deaths: p.state.deaths,
+    stage_time: Math.round(p.state.stage_time * 10) / 10,
+    x: Math.round(p.body.position.x),
+    y: Math.round(p.body.position.y),
+    vx: Math.round(p.body.velocity.x),
+    vy: Math.round(p.body.velocity.y),
+    respawning: p.state.respawn_time > 0
+  }));
+
+  const platforms = Array.from(game.actors.values())
+    .filter(a => a.type.includes('platform'))
+    .map(p => ({ name: p.name, hits: p.state.hit_count, max_hits: p.state.max_hits }));
+
+  const enemies = Array.from(game.actors.values())
+    .filter(a => a.type === 'enemy').length;
+
+  res.json({
+    frame: game.frame,
+    stage: game.stage,
+    clients: game.clients.size,
+    players,
+    enemies,
+    platforms,
+    stage_over: game.stage_over || false
+  });
+});
+
+app.get('/api/frame/:num', (req, res) => {
+  res.json({
+    frame: game.frame,
+    stage: game.stage,
+    snapshot: Array.from(game.actors.values()).map(a => ({
+      name: a.name,
+      type: a.type,
+      pos: [a.body.position.x, a.body.position.y],
+      vel: [a.body.velocity.x, a.body.velocity.y],
+      state: {
+        lives: a.state.lives,
+        score: a.state.score,
+        respawn_time: a.state.respawn_time,
+        on_ground: a.state.on_ground,
+        hit_count: a.state.hit_count
+      }
+    }))
+  });
+});
+
 let tickCount = 0;
 setInterval(() => {
   try {
     game.tick();
-    game.broadcastStateUpdate();
+    updateVersion++;
+    game.broadcastStateUpdate(updateVersion);
     tickCount++;
     if (tickCount % 60 === 0) {
       console.error(`[TICK] Frame ${game.frame}, Clients: ${game.clients.size}, HeldInput: ${game.heldInput.size}`);
