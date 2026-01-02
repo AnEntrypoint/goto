@@ -145,18 +145,33 @@ class GameClient {
       try {
         let msg;
         if (evt.data instanceof ArrayBuffer) {
-          if (!unpackr) throw new Error('msgpackr not loaded');
-          const arr = unpackr.unpack(new Uint8Array(evt.data));
-          msg = { type: arr[0], data: arr[1] };
+          if (!unpackr) {
+            console.error('msgpackr not available, falling back to JSON');
+            return;
+          }
+          try {
+            const arr = unpackr.unpack(new Uint8Array(evt.data));
+            msg = { type: arr[0], data: arr[1] };
+          } catch (msgpackError) {
+            console.error('msgpack unpack failed:', msgpackError.message);
+            throw msgpackError;
+          }
         } else if (typeof evt.data === 'string') {
-          msg = JSON.parse(evt.data);
+          try {
+            msg = JSON.parse(evt.data);
+          } catch (jsonError) {
+            console.error('JSON parse failed:', jsonError.message);
+            throw jsonError;
+          }
         } else {
+          if (!unpackr) throw new Error('msgpackr not loaded');
           const arr = unpackr.unpack(evt.data);
           msg = { type: arr[0], data: arr[1] };
         }
         this.handleMessageBinary(msg);
       } catch (e) {
-        console.error('Parse error:', e);
+        console.error('Message handling error:', e.message);
+        console.error('Event data type:', typeof evt.data, 'instanceof ArrayBuffer:', evt.data instanceof ArrayBuffer);
       }
     };
 

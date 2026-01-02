@@ -570,18 +570,23 @@ class PhysicsGame {
 
   broadcastToClients(message) {
     let msg;
-    if (Array.isArray(message)) {
-      msg = msgpack.pack(message);
-    } else if (typeof message === 'string') {
-      msg = message;
-    } else {
-      msg = msgpack.pack(message);
+    try {
+      if (Array.isArray(message)) {
+        msg = msgpack.pack(message);
+      } else if (typeof message === 'string') {
+        msg = message;
+      } else {
+        msg = msgpack.pack(message);
+      }
+    } catch (e) {
+      console.error('Msgpack encode error:', e.message);
+      return;
     }
 
     const msgSize = typeof msg === 'string' ? msg.length : msg.length;
     stats.messagesSent++;
-    stats.windowBytes += msgSize * this.clients.size;
-    stats.windowMessages += this.clients.size;
+    stats.windowBytes += msgSize;
+    stats.windowMessages++;
 
     const now = Date.now();
     const windowDuration = (now - stats.windowStartTime) / 1000;
