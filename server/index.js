@@ -229,6 +229,7 @@ class PhysicsGame {
 
       for (const [name, actor] of this.actors) {
         if (!actor.body) continue;
+        actor.body._prevPos = { x: actor.body.position.x, y: actor.body.position.y };
         actor.body.position.x += actor.body.velocity.x * (TICK_MS / 1000);
         actor.body.position.y += actor.body.velocity.y * (TICK_MS / 1000);
       }
