@@ -403,6 +403,9 @@ class PhysicsGame {
       if (actorA.type === 'player' || actorA.type === 'enemy') {
         contactingPlatforms.set(nameA, []);
       }
+    }
+
+    for (const [nameA, actorA] of this.actors) {
 
       for (const [nameB, actorB] of this.actors) {
         if (nameA === nameB) continue;
@@ -471,18 +474,19 @@ class PhysicsGame {
             const prevPlayerBottom = prevY + playerHH;
             const playerBottom = movingBody.position.y + playerHH;
             const landingFromAbove = movingBody.velocity.y > 0 && prevPlayerBottom < platformTop && playerBottom >= platformTop;
-            const restingOnPlatform = movingBody.velocity.y <= 0 && playerBottom > platformTop - 2 && playerBottom < platformBot + 2;
+            const restingOnPlatform = playerBottom > platformTop - 2 && playerBottom < platformBot + 2;
 
             if (landingFromAbove || restingOnPlatform) {
-              if (movingActor.type === 'player') {
-                console.error(`[LAND] Player landed on ${platformActor.name} at Y ${movingBody.position.y.toFixed(1)}`);
-              }
               movingBody.velocity.y = 0;
               movingActor.state._coyote_counter = 0;
 
               // Track contact for on_ground determination
-              if (contactingPlatforms.has(movingActor.name)) {
-                contactingPlatforms.get(movingActor.name).push(platformActor.name);
+              if (!contactingPlatforms.has(movingActor.name)) {
+                contactingPlatforms.set(movingActor.name, []);
+              }
+              const contactList = contactingPlatforms.get(movingActor.name);
+              if (contactList) {
+                contactList.push(platformActor.name);
               }
 
               if (platformActor.type === 'breakable_platform') {
@@ -730,6 +734,7 @@ const stats = {
   windowStartTime: Date.now()
 };
 
+app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 wss.on('connection', (ws) => {
@@ -867,6 +872,19 @@ app.post('/api/spawn/:type', (req, res) => {
     extra.player_id = Math.max(...Array.from(game.playerActors.keys()), 0) + 1;
   }
   game.spawn(req.params.type, [x, y], extra);
+  res.json({ ok: true });
+});
+
+app.post('/api/input', (req, res) => {
+  const { player_id, action, direction } = req.body || {};
+  if (!player_id || !action) {
+    return res.status(400).json({ error: 'player_id and action required' });
+  }
+  if (action === 'move') {
+    game.pendingInput.set(player_id, { action: 'move', direction: direction || 0 });
+  } else if (action === 'jump') {
+    game.pendingInput.set(player_id, { action: 'jump' });
+  }
   res.json({ ok: true });
 });
 
