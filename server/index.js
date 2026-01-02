@@ -398,6 +398,9 @@ class PhysicsGame {
     let checkCount = 0;
     let hitCount = 0;
 
+    // Log first 100 frames to see what's happening
+    const verbose = this.frame < 100;
+
     for (const [nameA, actorA] of this.actors) {
       actorA.state._landed_this_frame = false;
 
@@ -413,6 +416,13 @@ class PhysicsGame {
         const bodyB = actorB.body;
 
         const aabbHits = this.checkAABB(bodyA, bodyB);
+
+        // Debug first player-platform pair
+        if (verbose && nameA.includes('player') && nameB.includes('platform') && nameB === 'platform_1') {
+          const dx = Math.abs(bodyA.position.x - bodyB.position.x);
+          const dy = Math.abs(bodyA.position.y - bodyB.position.y);
+          console.error(`[DBG-${this.frame}] ${nameA}@(${bodyA.position.x.toFixed(0)},${bodyA.position.y.toFixed(0)}) vs ${nameB}@(${bodyB.position.x.toFixed(0)},${bodyB.position.y.toFixed(0)}) dx=${dx.toFixed(0)} dy=${dy.toFixed(0)} HIT=${aabbHits}`);
+        }
         if (actorA.type === 'player' && actorB.type === 'platform' && this.frame % 120 === 0) {
           const dx = Math.abs(bodyA.position.x - bodyB.position.x);
           const dy = Math.abs(bodyA.position.y - bodyB.position.y);
@@ -506,9 +516,16 @@ class PhysicsGame {
     const aHalfH = (bodyA._height || 32) / 2;
     const bHalfW = (bodyB._width || 32) / 2;
     const bHalfH = (bodyB._height || 16) / 2;
-    const dx = Math.abs(bodyA.position.x - bodyB.position.x);
-    const dy = Math.abs(bodyA.position.y - bodyB.position.y);
-    return dx < aHalfW + bHalfW && dy < aHalfH + bHalfH;
+    const prevPosA = bodyA._prevPos || bodyA.position;
+    const aMinX = Math.min(prevPosA.x, bodyA.position.x) - aHalfW;
+    const aMaxX = Math.max(prevPosA.x, bodyA.position.x) + aHalfW;
+    const aMinY = Math.min(prevPosA.y, bodyA.position.y) - aHalfH;
+    const aMaxY = Math.max(prevPosA.y, bodyA.position.y) + aHalfH;
+    const bMinX = bodyB.position.x - bHalfW;
+    const bMaxX = bodyB.position.x + bHalfW;
+    const bMinY = bodyB.position.y - bHalfH;
+    const bMaxY = bodyB.position.y + bHalfH;
+    return !(aMaxX < bMinX || aMinX > bMaxX || aMaxY < bMinY || aMinY > bMaxY);
   }
 
   checkGoal() {
