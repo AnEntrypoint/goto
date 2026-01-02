@@ -394,6 +394,76 @@ wss.on('connection', (ws) => {
   });
 });
 
+app.get('/api/status', (req, res) => {
+  res.json({
+    frame: game.frame,
+    stage: game.stage,
+    clients: game.clients.size,
+    actors: game.actors.size,
+    players: Array.from(game.playerActors.values()).map(a => ({
+      id: a.state.player_id,
+      pos: [a.body.position.x, a.body.position.y],
+      vel: [a.body.velocity.x, a.body.velocity.y],
+      on_ground: a.state.on_ground
+    }))
+  });
+});
+
+app.get('/api/actors', (req, res) => {
+  res.json(Array.from(game.actors.values()).map(a => ({
+    name: a.name,
+    type: a.type,
+    pos: [a.body.position.x, a.body.position.y],
+    vel: [a.body.velocity.x, a.body.velocity.y],
+    state: a.state
+  })));
+});
+
+app.get('/api/actor/:name', (req, res) => {
+  const actor = game.actors.get(req.params.name);
+  if (!actor) return res.status(404).json({ error: 'Actor not found' });
+  res.json({
+    name: actor.name,
+    type: actor.type,
+    pos: [actor.body.position.x, actor.body.position.y],
+    vel: [actor.body.velocity.x, actor.body.velocity.y],
+    state: actor.state
+  });
+});
+
+app.post('/api/stage/:num', (req, res) => {
+  const num = parseInt(req.params.num);
+  if (num < 1 || num > 4) return res.status(400).json({ error: 'Invalid stage' });
+  game.nextStage = () => {
+    if (game.stage < 4) game.loadStage(game.stage + 1);
+  };
+  if (num !== game.stage) game.loadStage(num);
+  res.json({ stage: game.stage, name: game.level.name });
+});
+
+app.post('/api/spawn/:type', (req, res) => {
+  const { x = 640, y = 360, ...extra } = req.body || {};
+  game.spawn(req.params.type, [x, y], extra);
+  res.json({ ok: true });
+});
+
+app.get('/api/levels', (req, res) => {
+  const levels = [1, 2, 3, 4].map(n => {
+    const filePath = path.join(__dirname, '..', 'game', `levels/stage${n}.json`);
+    if (!fs.existsSync(filePath)) return null;
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return { stage: n, name: data.name, platforms: data.platforms.length, enemies: data.enemies.length };
+  }).filter(Boolean);
+  res.json(levels);
+});
+
+app.get('/api/level/:num', (req, res) => {
+  const num = parseInt(req.params.num);
+  const filePath = path.join(__dirname, '..', 'game', `levels/stage${num}.json`);
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Level not found' });
+  res.json(JSON.parse(fs.readFileSync(filePath, 'utf8')));
+});
+
 let tickCount = 0;
 setInterval(() => {
   try {

@@ -5,6 +5,48 @@ if (!ctx) throw new Error('2D context not available');
 const info = document.getElementById('info');
 if (!info) throw new Error('Info element not found');
 
+const particles = new ParticleSystem();
+const sprites = new SpriteRenderer();
+const sound = new SoundManager();
+
+class Camera {
+  constructor() {
+    this.x = 0;
+    this.y = 0;
+    this.shakeX = 0;
+    this.shakeY = 0;
+    this.shakeIntensity = 0;
+    this.zoom = 1;
+    this.targetZoom = 1;
+  }
+
+  shake(intensity) {
+    this.shakeIntensity = Math.max(this.shakeIntensity, intensity);
+  }
+
+  update(targetX, targetY) {
+    const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+    this.x += (targetX - this.x) * easeOut(0.1);
+    this.y += (targetY - this.y) * easeOut(0.1);
+    this.zoom += (this.targetZoom - this.zoom) * 0.1;
+
+    if (this.shakeIntensity > 0) {
+      this.shakeX = (Math.random() - 0.5) * this.shakeIntensity * 2;
+      this.shakeY = (Math.random() - 0.5) * this.shakeIntensity * 2;
+      this.shakeIntensity *= 0.9;
+    } else {
+      this.shakeX = 0;
+      this.shakeY = 0;
+    }
+  }
+
+  apply(ctx) {
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.scale(this.zoom, this.zoom);
+    ctx.translate(-(this.x + this.shakeX), -(this.y + this.shakeY));
+  }
+}
+
 class GameClient {
   constructor() {
     this.ws = null;
@@ -14,11 +56,12 @@ class GameClient {
     this.stage = 1;
     this.levelName = '';
     this.keysHeld = { left: false, right: false };
-    this.cameraX = 0;
-    this.cameraY = 0;
+    this.camera = new Camera();
     this.goalReached = false;
     this.goalTime = 0;
     this.goal = null;
+    this.lastActorState = new Map();
+    this.debugMode = false;
 
     this.connect();
     this.setupInput();
@@ -87,10 +130,16 @@ class GameClient {
           for (const name in msg.actors) {
             if (this.actors.has(name)) {
               const actor = this.actors.get(name);
+              const lastState = this.lastActorState.get(name) || {};
+              const newState = msg.actors[name].state || {};
+
               if (Array.isArray(msg.actors[name].pos)) actor.pos = [...msg.actors[name].pos];
               if (msg.actors[name].state && typeof msg.actors[name].state === 'object') {
                 actor.state = { ...msg.actors[name].state };
               }
+
+              this.detectStateChanges(actor, lastState, newState);
+              this.lastActorState.set(name, { ...newState });
             }
           }
         }
@@ -100,6 +149,12 @@ class GameClient {
         if (msg.playerId === this.playerId) {
           this.goalReached = true;
           this.goalTime = this.frame;
+          if (this.goal) {
+            particles.emit('confetti', this.goal.x, this.goal.y);
+            particles.emit('confetti', this.goal.x, this.goal.y);
+          }
+          sound.playGoal();
+          this.camera.targetZoom = 1.2;
         }
         break;
       case 'stageload':
@@ -128,14 +183,34 @@ class GameClient {
   updateCamera() {
     const player = Array.from(this.actors.values()).find(a => a && a.state && a.state.player_id === this.playerId);
     if (player && Array.isArray(player.pos) && isFinite(player.pos[0]) && isFinite(player.pos[1])) {
-      const targetX = player.pos[0] - canvas.width / 2;
-      const targetY = Math.max(0, player.pos[1] - canvas.height / 3);
-      if (Math.abs(targetX - this.cameraX) > 200 || Math.abs(targetY - this.cameraY) > 200) {
-        this.cameraX = targetX;
-        this.cameraY = targetY;
-      } else {
-        this.cameraX += (targetX - this.cameraX) * 0.1;
-        this.cameraY += (targetY - this.cameraY) * 0.1;
+      const targetX = player.pos[0];
+      const targetY = Math.max(0, player.pos[1]);
+      this.camera.update(targetX, targetY);
+    }
+  }
+
+  detectStateChanges(actor, lastState, newState) {
+    if (actor.type === 'player') {
+      const wasGrounded = lastState.on_ground;
+      const isGrounded = newState.on_ground;
+      const wasAirborne = !wasGrounded;
+      const isAirborne = !isGrounded;
+
+      if (wasAirborne && isGrounded) {
+        particles.emit('land', actor.pos[0], actor.pos[1]);
+        this.camera.shake(5);
+        sound.playLand();
+      } else if (wasGrounded && isAirborne && Math.abs(newState.vel_y) > 5) {
+        particles.emit('jump', actor.pos[0], actor.pos[1]);
+        sound.playJump();
+      }
+    } else if (actor.type === 'breakable_platform') {
+      const lastHits = lastState.hit_count || 0;
+      const newHits = newState.hit_count || 0;
+      if (newHits > lastHits) {
+        particles.emit('break', actor.pos[0], actor.pos[1]);
+        sound.playBreak();
+        this.camera.shake(3);
       }
     }
   }
@@ -170,6 +245,17 @@ class GameClient {
         this.updateMovement();
       }
     });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'F3') {
+        e.preventDefault();
+        this.debugMode = !this.debugMode;
+      }
+      if (e.key === 'm' || e.key === 'M') {
+        sound.sfxEnabled = !sound.sfxEnabled;
+        info.textContent = `SFX: ${sound.sfxEnabled ? 'ON' : 'OFF'}`;
+      }
+    });
   }
 
   updateMovement() {
@@ -196,7 +282,7 @@ class GameClient {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     ctx.save();
-    ctx.translate(-this.cameraX, -this.cameraY);
+    this.camera.apply(ctx);
 
     const actors = Array.from(this.actors.values()).sort((a, b) => {
       const order = { platform: 1, breakable_platform: 2, enemy: 3, player: 4 };
@@ -208,14 +294,18 @@ class GameClient {
     }
 
     if (!this.goalReached && this.goal) {
+      const pulse = Math.sin(this.frame * 0.05) * 0.3 + 0.7;
       ctx.fillStyle = '#FFD700';
       ctx.beginPath();
-      ctx.arc(this.goal.x, this.goal.y, 15, 0, Math.PI * 2);
+      ctx.arc(this.goal.x, this.goal.y, 15 * pulse, 0, Math.PI * 2);
       ctx.fill();
       ctx.strokeStyle = '#FFA500';
       ctx.lineWidth = 2;
       ctx.stroke();
     }
+
+    particles.update(1 / 60);
+    particles.render(ctx);
 
     ctx.restore();
 
@@ -224,47 +314,21 @@ class GameClient {
 
   renderActor(actor) {
     const [x, y] = actor.pos;
+    const w = actor.state.width || 32;
+    const h = (actor.type === 'platform' || actor.type === 'breakable_platform') ? 16 : 32;
 
-    ctx.fillStyle = {
-      player: '#FFFFFF',
-      enemy: '#FF4444',
-      platform: '#8B7355',
-      breakable_platform: '#CD853F'
-    }[actor.type] || '#CCCCCC';
-
-    let w, h;
-    if (actor.type === 'platform' || actor.type === 'breakable_platform') {
-      w = actor.state.width || 32;
-      h = 16;
-    } else {
-      w = 32;
-      h = 32;
-    }
-
-    ctx.fillRect(x - w / 2, y - h / 2, w, h);
-
-    ctx.strokeStyle = '#000000';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(x - w / 2, y - h / 2, w, h);
-
-    if (actor.type === 'player') {
-      ctx.fillStyle = '#000000';
-      ctx.font = 'bold 14px Arial';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(`P${actor.state.player_id || '?'}`, x, y);
-    } else if (actor.type === 'enemy') {
-      ctx.fillStyle = '#000000';
-      ctx.font = 'bold 20px Arial';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('❄', x, y - 2);
-    }
-
-    if (actor.state.on_ground && actor.type === 'player') {
-      ctx.strokeStyle = '#00DD00';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(x - w / 2 - 2, y - h / 2 - 2, w + 4, h + 4);
+    switch (actor.type) {
+      case 'player':
+        sprites.drawPlayer(ctx, x, y, actor.state, this.frame);
+        break;
+      case 'enemy':
+        sprites.drawEnemy(ctx, x, y, this.frame);
+        break;
+      case 'platform':
+      case 'breakable_platform':
+        const isDamaged = actor.type === 'breakable_platform' ? (actor.state.hit_count || 0) : 0;
+        sprites.drawPlatform(ctx, x, y, w, h, isDamaged);
+        break;
     }
   }
 
