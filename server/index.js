@@ -681,7 +681,7 @@ class PhysicsGame {
       this.loadStage(this.stage);
       this.stage_over = false;
       this.clients.forEach((client) => {
-        const spawnPos = [500 + (client.playerId - 1) * 50,656];
+        const spawnPos = this.getSpawnPosition(client.playerId);
         this.spawn('player', spawnPos, { player_id: client.playerId });
       });
     }
