@@ -243,6 +243,12 @@ class PhysicsGame {
       this.updateRespawns();
       this.updateActors();
 
+      // Save position BEFORE movement for swept collision detection
+      for (const [name, actor] of this.actors) {
+        if (!actor.body) continue;
+        actor.body._prevPos = { x: actor.body.position.x, y: actor.body.position.y };
+      }
+
       for (const [name, actor] of this.actors) {
         if (!actor.body) continue;
         actor.body.position.x += actor.body.velocity.x * (TICK_MS / 1000);
@@ -252,12 +258,6 @@ class PhysicsGame {
       this.checkCollisions();
       this.checkGoal();
       this.updateGameState();
-
-      // Save position AFTER collision check for next frame's swept detection
-      for (const [name, actor] of this.actors) {
-        if (!actor.body) continue;
-        actor.body._prevPos = { x: actor.body.position.x, y: actor.body.position.y };
-      }
     }
 
     this.removeDeadActors();
@@ -394,24 +394,30 @@ class PhysicsGame {
   }
 
   checkCollisions() {
+    const checked = new Set();
+
     for (const [nameA, actorA] of this.actors) {
       actorA.state._landed_this_frame = false;
 
       for (const [nameB, actorB] of this.actors) {
-        if (nameA >= nameB) continue;
+        if (nameA === nameB) continue;
+
+        const pairKey = [nameA, nameB].sort().join('|');
+        if (checked.has(pairKey)) continue;
+        checked.add(pairKey);
 
         const bodyA = actorA.body;
         const bodyB = actorB.body;
 
         const aabbHits = this.checkAABB(bodyA, bodyB);
-        if (actorA.type === 'player' && actorB.name === 'platform_1' && this.frame < 20) {
+        if (actorA.type === 'player' && actorB.type === 'platform' && this.frame % 120 === 0) {
           const dx = Math.abs(bodyA.position.x - bodyB.position.x);
           const dy = Math.abs(bodyA.position.y - bodyB.position.y);
           const aW = (bodyA._width || 32) / 2;
           const aH = (bodyA._height || 32) / 2;
           const bW = (bodyB._width || 32) / 2;
           const bH = (bodyB._height || 16) / 2;
-          console.error(`[AABB-${this.frame}] player@(${bodyA.position.x.toFixed(0)},${bodyA.position.y.toFixed(0)}) vs plat@(${bodyB.position.x.toFixed(0)},${bodyB.position.y.toFixed(0)}) | dx=${dx.toFixed(1)}<${(aW+bW).toFixed(1)}? dy=${dy.toFixed(1)}<${(aH+bH).toFixed(1)}? hit=${aabbHits}`);
+          console.error(`[AABB] ${nameA}@(${bodyA.position.x.toFixed(0)},${bodyA.position.y.toFixed(0)}) vs ${nameB}@(${bodyB.position.x.toFixed(0)},${bodyB.position.y.toFixed(0)}) | dx=${dx.toFixed(1)}<${(aW+bW).toFixed(1)}? dy=${dy.toFixed(1)}<${(aH+bH).toFixed(1)}? hit=${aabbHits}`);
         }
 
         if (aabbHits) {
