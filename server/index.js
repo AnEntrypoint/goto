@@ -199,6 +199,7 @@ class PhysicsGame {
     this.pausedPlayers = new Set();
     this.lastActorState = new Map();
     this.stage_transitioning = false;
+    this.inputRateLimit = new Map();
     this.loadStage(1);
   }
 
@@ -828,6 +829,16 @@ class PhysicsGame {
       this.stage_over_time = this.frame;
     }
   }
+
+  checkInputRateLimit(playerId) {
+    const now = Date.now();
+    const lastInput = this.inputRateLimit.get(playerId);
+    if (lastInput && (now - lastInput) < 16) {
+      return false;
+    }
+    this.inputRateLimit.set(playerId, now);
+    return true;
+  }
 }
 
 const app = express();
@@ -907,6 +918,7 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
+    console.error(`[DISCONNECT] Player ${playerId}`);
     for (const [name, actor] of game.actors) {
       if (actor && actor.state && actor.state.player_id === playerId) {
         actor.state.removed = true;
@@ -915,9 +927,14 @@ wss.on('connection', (ws) => {
     game.clients.delete(playerId);
     game.heldInput.delete(playerId);
     game.pendingInput.delete(playerId);
+    game.inputRateLimit.delete(playerId);
+    const wasInPausedSet = game.pausedPlayers.has(playerId);
     game.pausedPlayers.delete(playerId);
-    if (game.pausedPlayers.size < game.clients.size && game.paused) {
+    game.playerActors.delete(playerId);
+
+    if (wasInPausedSet && game.pausedPlayers.size < game.clients.size && game.paused) {
       game.paused = false;
+      game.broadcastToClients(buildResumeMessage());
     }
   });
 
@@ -1008,6 +1025,9 @@ app.post('/api/input', (req, res) => {
   const { player_id, action, direction } = req.body || {};
   if (!player_id || !action) {
     return res.status(400).json({ error: 'player_id and action required' });
+  }
+  if (!game.checkInputRateLimit(player_id)) {
+    return res.status(429).json({ error: 'Rate limit exceeded' });
   }
   if (action === 'move') {
     const dir = direction > 0 ? 1 : direction < 0 ? -1 : 0;
