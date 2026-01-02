@@ -84,6 +84,7 @@ function buildResumeMessage() {
 function computeStateChecksum(actors) {
   let sum = 0;
   for (const [name, actor] of actors) {
+    if (actor.state.removed) continue;
     const x = Math.round(actor.body.position.x);
     const y = Math.round(actor.body.position.y);
     const vx = Math.round(actor.body.velocity.x);
@@ -209,6 +210,7 @@ class PhysicsGame {
     this.stage = stageNum;
     const savedPlayers = new Map();
     for (const [playerId, actor] of this.playerActors) {
+      if (actor.state.removed) continue;
       savedPlayers.set(playerId, {
         player_id: playerId,
         lives: actor.state.lives,
@@ -221,6 +223,7 @@ class PhysicsGame {
     this.playerActors.clear();
     this.bodies.forEach(b => World.remove(this.engine.world, b));
     this.bodies.clear();
+    this.lastActorState.clear();
     this.pausedPlayers.clear();
     this.nextNetId = 1;
     this.frame = 0;
@@ -328,7 +331,7 @@ class PhysicsGame {
     this.actors.set(actor.name, actor);
     this.bodies.set(actor.name, body);
 
-    if (type === 'player' && extra.player_id) {
+    if (type === 'player' && extra.player_id !== undefined && extra.player_id !== null) {
       this.playerActors.set(extra.player_id, actor);
     }
 
@@ -380,7 +383,6 @@ class PhysicsGame {
         if (actor && !actor.state.removed && (actor.state.on_ground || actor.state._coyote_counter < 6)) {
           actor.body.velocity.y = PHYSICS.JUMP_VELOCITY;
           actor.state._coyote_counter = 6;
-          actor.state._jump_frame = this.frame;
         }
       }
     }
@@ -408,6 +410,7 @@ class PhysicsGame {
       const playerRadius = 16;
 
       for (const actor of this.actors.values()) {
+        if (actor.state.removed) continue;
         const dx = Math.abs(actor.body.position.x - pos[0]);
         const dy = Math.abs(actor.body.position.y - pos[1]);
         const dist = Math.sqrt(dx * dx + dy * dy);
@@ -421,6 +424,7 @@ class PhysicsGame {
       }
 
       const onPlatform = Array.from(this.actors.values()).some(a =>
+        !a.state.removed &&
         (a.type === 'platform' || a.type === 'breakable_platform') &&
         Math.abs(a.body.position.x - pos[0]) < 40 &&
         Math.abs(a.body.position.y - (pos[1] + 24)) < 12
@@ -453,7 +457,7 @@ class PhysicsGame {
       if (actor.state.respawn_time > 0) {
         actor.state.respawn_time -= TICK_MS / 1000;
 
-        if (actor.state.respawn_time <= 0 && actor.state.respawn_time > -(TICK_MS / 1000) * 2) {
+        if (actor.state.respawn_time <= 0) {
           const spawnPos = this.getSpawnPosition(actor.state.player_id);
           actor.body.position.x = spawnPos[0];
           actor.body.position.y = spawnPos[1];
@@ -577,7 +581,7 @@ class PhysicsGame {
             const playerRight = movingBody.position.x + playerHW;
             const xOverlap = playerRight >= platformLeft && playerLeft <= platformRight;
             const landingFromAbove = xOverlap && movingBody.velocity.y > 0 && prevPlayerBottom < platformTop && playerBottom >= platformTop;
-            const restingOnPlatform = xOverlap && playerBottom >= platformTop && playerBottom <= platformTop + 4;
+            const restingOnPlatform = xOverlap && playerBottom >= platformTop && playerBottom <= platformTop;
 
             if (landingFromAbove || restingOnPlatform) {
               movingBody.velocity.y = 0;
@@ -630,7 +634,7 @@ class PhysicsGame {
     const aHalfW = (bodyA._width || 32) / 2;
     const aHalfH = (bodyA._height || 32) / 2;
     const bHalfW = (bodyB._width || 32) / 2;
-    const bHalfH = (bodyB._height || 16) / 2;
+    const bHalfH = (bodyB._height || 32) / 2;
     const prevPosA = bodyA._prevPos || bodyA.position;
     const aTop = Math.min(prevPosA.y, bodyA.position.y) - aHalfH;
     const aBot = Math.max(prevPosA.y, bodyA.position.y) + aHalfH;
@@ -675,7 +679,7 @@ class PhysicsGame {
 
   updateGameState() {
     const activePlayers = Array.from(this.actors.values())
-      .filter(a => a.type === 'player' && a.state.lives > 0 && a.state.respawn_time <= 0);
+      .filter(a => a.type === 'player' && a.state.lives > 0);
 
     if (activePlayers.length === 0) {
       const connectedPlayers = Array.from(this.actors.values())
@@ -723,12 +727,14 @@ class PhysicsGame {
   broadcastStateUpdate(version) {
     const actors = {};
     for (const [name, actor] of this.actors) {
+      if (actor.state.removed) continue;
       const delta = serializeActorDelta(actor, this.lastActorState.get(name));
       if (delta) {
         actors[name] = delta;
       }
     }
     for (const [name, actor] of this.actors) {
+      if (actor.state.removed) continue;
       this.lastActorState.set(name, serializeActorState(actor));
     }
     if (this.lastActorState.size > 1000) {
@@ -809,7 +815,9 @@ class PhysicsGame {
 
   nextStageClients() {
     const deadClients = [];
-    const actors = Array.from(this.actors.values()).map(a => serializeActorFull(a));
+    const actors = Array.from(this.actors.values())
+      .filter(a => !a.state.removed)
+      .map(a => serializeActorFull(a));
     const msg = buildStageloadMessage(this.stage, this.level.name, this.level.goal, actors);
     this.clients.forEach((client, playerId) => {
       if (client && client.ws) {
@@ -893,12 +901,19 @@ app.use(express.static(path.join(__dirname, 'public')));
 wss.on('connection', (ws) => {
   const playerId = getNextPlayerId();
   const spawnPos = game.getSpawnPosition(playerId);
-  game.spawn('player', spawnPos, { player_id: playerId });
+  const actor = game.spawn('player', spawnPos, { player_id: playerId });
+  if (!actor) {
+    console.error(`Failed to spawn player ${playerId}`);
+    ws.close();
+    return;
+  }
 
   const client = { ws, playerId };
   game.clients.set(playerId, client);
 
-  const actors = Array.from(game.actors.values()).map(a => serializeActorFull(a));
+  const actors = Array.from(game.actors.values())
+    .filter(a => !a.state.removed)
+    .map(a => serializeActorFull(a));
   const initMsg = buildInitMessage(playerId, game.stage, game.level.name, game.level.goal, game.frame, actors);
   ws.send(JSON.stringify(initMsg));
 
@@ -919,18 +934,24 @@ wss.on('connection', (ws) => {
         game.pendingInput.set(playerId, { action: 'jump' });
       } else if (action === 'nextstage') {
         const actor = game.playerActors.get(playerId);
-        if (actor && actor.state._goal_reached && !game.stage_transitioning) {
+        if (actor && !actor.state.removed && actor.state._goal_reached && !game.stage_transitioning) {
           game.nextStage();
         }
       } else if (action === 'pause') {
-        game.pausedPlayers.add(playerId);
-        if (game.pausedPlayers.size === game.clients.size) {
-          game.paused = true;
-          game.broadcastToClients(buildPauseMessage());
+        if (game.clients.has(playerId)) {
+          game.pausedPlayers.add(playerId);
+          const connectedCount = Array.from(game.pausedPlayers).filter(pid => game.clients.has(pid)).length;
+          const allConnectedPaused = connectedCount > 0 && connectedCount === game.clients.size;
+          if (allConnectedPaused) {
+            game.paused = true;
+            game.broadcastToClients(buildPauseMessage());
+          }
         }
       } else if (action === 'resume') {
         game.pausedPlayers.delete(playerId);
-        if (game.pausedPlayers.size < game.clients.size) {
+        const connectedCount = Array.from(game.pausedPlayers).filter(pid => game.clients.has(pid)).length;
+        const anyConnectedPaused = connectedCount > 0;
+        if (!anyConnectedPaused && game.clients.size > 0) {
           game.paused = false;
           game.broadcastToClients(buildResumeMessage());
         }
@@ -951,11 +972,12 @@ wss.on('connection', (ws) => {
     game.heldInput.delete(playerId);
     game.pendingInput.delete(playerId);
     game.inputRateLimit.delete(playerId);
-    const wasInPausedSet = game.pausedPlayers.has(playerId);
     game.pausedPlayers.delete(playerId);
     game.playerActors.delete(playerId);
 
-    if (wasInPausedSet && game.pausedPlayers.size < game.clients.size && game.paused) {
+    const connectedCount = Array.from(game.pausedPlayers).filter(pid => game.clients.has(pid)).length;
+    const anyConnectedPaused = connectedCount > 0;
+    if (game.paused && !anyConnectedPaused && game.clients.size > 0) {
       game.paused = false;
       game.broadcastToClients(buildResumeMessage());
     }
@@ -991,24 +1013,26 @@ app.get('/api/status', (req, res) => {
 });
 
 app.get('/api/actors', (req, res) => {
-  res.json(Array.from(game.actors.values()).map(a => {
-    let state = {};
-    if (a.type === 'player') {
-      state = { width: a.state.width, player_id: a.state.player_id, lives: a.state.lives, score: a.state.score, deaths: a.state.deaths, on_ground: a.state.on_ground };
-    } else if (a.type === 'enemy') {
-      state = { on_ground: a.state.on_ground };
-    } else if (a.type === 'platform') {
-      state = { width: a.state.width };
-    } else if (a.type === 'breakable_platform') {
-      state = { width: a.state.width, hit_count: a.state.hit_count };
-    }
-    return { name: a.name, type: a.type, pos: [a.body.position.x, a.body.position.y], vel: [a.body.velocity.x, a.body.velocity.y], state };
-  }));
+  res.json(Array.from(game.actors.values())
+    .filter(a => !a.state.removed)
+    .map(a => {
+      let state = {};
+      if (a.type === 'player') {
+        state = { width: a.state.width, player_id: a.state.player_id, lives: a.state.lives, score: a.state.score, deaths: a.state.deaths, on_ground: a.state.on_ground };
+      } else if (a.type === 'enemy') {
+        state = { on_ground: a.state.on_ground };
+      } else if (a.type === 'platform') {
+        state = { width: a.state.width };
+      } else if (a.type === 'breakable_platform') {
+        state = { width: a.state.width, hit_count: a.state.hit_count };
+      }
+      return { name: a.name, type: a.type, pos: [a.body.position.x, a.body.position.y], vel: [a.body.velocity.x, a.body.velocity.y], state };
+    }));
 });
 
 app.get('/api/actor/:name', (req, res) => {
   const actor = game.actors.get(req.params.name);
-  if (!actor) return res.status(404).json({ error: 'Actor not found' });
+  if (!actor || actor.state.removed) return res.status(404).json({ error: 'Actor not found' });
   let state = {};
   if (actor.type === 'player') {
     state = { width: actor.state.width, player_id: actor.state.player_id, lives: actor.state.lives, score: actor.state.score, deaths: actor.state.deaths, on_ground: actor.state.on_ground };
@@ -1038,7 +1062,8 @@ app.post('/api/stage/:num', (req, res) => {
 app.post('/api/spawn/:type', (req, res) => {
   const { x = 640, y = 360, ...extra } = req.body || {};
   if (req.params.type === 'player' && !extra.player_id) {
-    extra.player_id = Math.max(...Array.from(game.playerActors.keys()), 0) + 1;
+    const maxId = Array.from(game.playerActors.keys()).reduce((max, id) => Math.max(max, id), 0);
+    extra.player_id = maxId + 1;
   }
   const actor = game.spawn(req.params.type, [x, y], extra);
   if (!actor) {
@@ -1056,6 +1081,9 @@ app.post('/api/input', (req, res) => {
     return res.status(429).json({ error: 'Rate limit exceeded' });
   }
   if (action === 'move') {
+    if (typeof direction !== 'number') {
+      return res.status(400).json({ error: 'direction must be a number' });
+    }
     const dir = direction > 0 ? 1 : direction < 0 ? -1 : 0;
     game.pendingInput.set(player_id, { action: 'move', direction: dir });
   } else if (action === 'jump') {
@@ -1092,25 +1120,27 @@ app.get('/api/level/:num', (req, res) => {
 });
 
 app.get('/api/stats', (req, res) => {
-  const players = Array.from(game.playerActors.values()).map(p => ({
-    id: p.state.player_id,
-    score: p.state.score,
-    lives: p.state.lives,
-    deaths: p.state.deaths,
-    stage_time: Math.round(p.state.stage_time * 10) / 10,
-    x: Math.round(p.body.position.x),
-    y: Math.round(p.body.position.y),
-    vx: Math.round(p.body.velocity.x),
-    vy: Math.round(p.body.velocity.y),
-    respawning: p.state.respawn_time > 0
-  }));
+  const players = Array.from(game.playerActors.values())
+    .filter(p => !p.state.removed)
+    .map(p => ({
+      id: p.state.player_id,
+      score: p.state.score,
+      lives: p.state.lives,
+      deaths: p.state.deaths,
+      stage_time: Math.round(p.state.stage_time * 10) / 10,
+      x: Math.round(p.body.position.x),
+      y: Math.round(p.body.position.y),
+      vx: Math.round(p.body.velocity.x),
+      vy: Math.round(p.body.velocity.y),
+      respawning: p.state.respawn_time > 0
+    }));
 
   const platforms = Array.from(game.actors.values())
-    .filter(a => a.type.includes('platform'))
+    .filter(a => !a.state.removed && a.type.includes('platform'))
     .map(p => ({ name: p.name, hits: p.state.hit_count, max_hits: p.state.max_hits }));
 
   const enemies = Array.from(game.actors.values())
-    .filter(a => a.type === 'enemy').length;
+    .filter(a => !a.state.removed && a.type === 'enemy').length;
 
   res.json({
     frame: game.frame,
@@ -1127,15 +1157,17 @@ app.get('/api/frame/:num', (req, res) => {
   res.json({
     frame: game.frame,
     stage: game.stage,
-    snapshot: Array.from(game.actors.values()).map(a => {
-      let state = {};
-      if (a.type === 'player') {
-        state = { lives: a.state.lives, score: a.state.score, respawn_time: a.state.respawn_time, on_ground: a.state.on_ground };
-      } else if (a.type === 'breakable_platform') {
-        state = { hit_count: a.state.hit_count };
-      }
-      return { name: a.name, type: a.type, pos: [a.body.position.x, a.body.position.y], vel: [a.body.velocity.x, a.body.velocity.y], state };
-    })
+    snapshot: Array.from(game.actors.values())
+      .filter(a => !a.state.removed)
+      .map(a => {
+        let state = {};
+        if (a.type === 'player') {
+          state = { lives: a.state.lives, score: a.state.score, respawn_time: a.state.respawn_time, on_ground: a.state.on_ground };
+        } else if (a.type === 'breakable_platform') {
+          state = { hit_count: a.state.hit_count };
+        }
+        return { name: a.name, type: a.type, pos: [a.body.position.x, a.body.position.y], vel: [a.body.velocity.x, a.body.velocity.y], state };
+      })
   });
 });
 
