@@ -789,6 +789,8 @@ class PhysicsGame {
       this.heldInput.delete(playerId);
       this.pendingInput.delete(playerId);
       this.pausedPlayers.delete(playerId);
+      this.inputRateLimit.delete(playerId);
+      this.playerActors.delete(playerId);
     }
   }
 
@@ -817,6 +819,8 @@ class PhysicsGame {
       this.heldInput.delete(playerId);
       this.pendingInput.delete(playerId);
       this.pausedPlayers.delete(playerId);
+      this.inputRateLimit.delete(playerId);
+      this.playerActors.delete(playerId);
     }
   }
 
