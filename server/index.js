@@ -300,7 +300,7 @@ class PhysicsGame {
 
   getSpawnPosition(playerId) {
     const baseX = 500 + (playerId - 1) * 50;
-    const baseY = 664;
+    const baseY = 640;
     const searchRadius = 100;
 
     for (let radius = 0; radius < searchRadius; radius += 20) {
