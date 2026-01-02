@@ -1,10 +1,10 @@
 {
   "mcpServers": {
-    "godot": {
+    "goto": {
       "command": "node",
       "args": ["./godot-mcp/index.js"],
       "env": {
-        "GODOT_PROJECT_PATH": "./game"
+        "PORT": "3008"
       }
     }
   }

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
-import { spawn, execSync } from 'child_process';
-import { createConnection } from 'net';
-import { join, dirname, normalize } from 'path';
+import { spawn, exec } from 'child_process';
+import { join, dirname } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
-import { existsSync, readdirSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
+import fetch from 'node-fetch';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
@@ -12,317 +12,269 @@ import { CallToolRequestSchema, ListToolsRequestSchema, McpError, ErrorCode } fr
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const projectRoot = dirname(__dirname);
-const projectPath = join(projectRoot, 'game');
+const serverDir = join(projectRoot, 'server');
 
-let godotPath = null;
-let editorProcess = null;
-let gameProcess = null;
-let gameProcesses = [];
-let gameRunning = false;
-let socket = null;
-let connected = false;
+let serverProcess = null;
 let debugLogs = [];
+const API_BASE = 'http://localhost:3008';
+const PORT = process.env.PORT || 3008;
 
-async function detectGodotPath() {
-  if (godotPath) return godotPath;
-
-  const candidates = [
-    process.env.GODOT_PATH,
-    'godot',
-    '/usr/bin/godot',
-    '/usr/local/bin/godot',
-    'C:\\Program Files\\Godot\\godot.exe',
-    normalize(join(projectRoot, 'godot.exe')),
-  ].filter(Boolean);
-
-  for (const candidate of candidates) {
-    try {
-      execSync(`"${candidate}" --version`, { stdio: 'ignore' });
-      godotPath = candidate;
-      console.error(`[SERVER] Found Godot at: ${godotPath}`);
-      return godotPath;
-    } catch (e) {}
+async function startServer() {
+  if (serverProcess) {
+    return { content: [{ type: 'text', text: 'Server already running' }] };
   }
 
-  return null;
-}
-
-async function launchEditor(projectPath) {
-  if (editorProcess) {
-    return { content: [{ type: 'text', text: 'Editor already running' }], isError: true };
-  }
-
-  if (!godotPath) {
-    await detectGodotPath();
-    if (!godotPath) {
-      return { content: [{ type: 'text', text: 'Could not find Godot executable' }], isError: true };
-    }
-  }
-
-  if (!existsSync(join(projectPath, 'project.godot'))) {
-    return { content: [{ type: 'text', text: `Not a valid Godot project: ${projectPath}` }], isError: true };
-  }
-
-  console.error(`[SERVER] Launching Godot editor for: ${projectPath}`);
-  editorProcess = spawn(godotPath, ['-e', '--path', projectPath], {
+  console.error(`[MCP] Starting game server on port ${PORT}...`);
+  serverProcess = spawn('node', [join(serverDir, 'index.js')], {
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false,
+    env: { ...process.env, PORT }
   });
 
-  editorProcess.on('exit', () => {
-    editorProcess = null;
-    gameRunning = false;
-    connected = false;
-    socket?.destroy();
-  });
-
-  return { content: [{ type: 'text', text: 'Godot editor launched' }] };
-}
-
-async function runProject(p_projectPath, clients = 1) {
-  if (gameRunning && gameProcess && clients === 1) {
-    return { content: [{ type: 'text', text: 'Game already running' }], isError: true };
-  }
-
-  if (gameProcesses.length > 0 && clients > 1) {
-    return { content: [{ type: 'text', text: 'Multiple clients already running' }], isError: true };
-  }
-
-  if (!godotPath) {
-    await detectGodotPath();
-    if (!godotPath) {
-      return { content: [{ type: 'text', text: 'Could not find Godot executable' }], isError: true };
+  serverProcess.stdout?.on('data', (data) => {
+    const line = data.toString().trim();
+    if (line) {
+      debugLogs.push(`[SERVER] ${line}`);
+      console.error(`[GAME] ${line}`);
     }
-  }
+  });
 
-  if (!existsSync(join(p_projectPath, 'project.godot'))) {
-    return { content: [{ type: 'text', text: `Not a valid Godot project: ${p_projectPath}` }], isError: true };
-  }
-
-  debugLogs = [];
-  gameRunning = true;
-
-  if (clients === 1) {
-    console.error(`[SERVER] Running Godot project: ${p_projectPath}`);
-    gameProcess = spawn(godotPath, ['--path', p_projectPath], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: false,
-    });
-
-    attachGameProcessListeners(gameProcess, 'Game1');
-    gameProcess.on('exit', () => {
-      gameRunning = false;
-      connected = false;
-      socket?.destroy();
-      gameProcess = null;
-    });
-  } else {
-    console.error(`[SERVER] Running ${clients} Godot clients: ${p_projectPath}`);
-    for (let i = 0; i < clients; i++) {
-      const proc = spawn(godotPath, ['--path', p_projectPath], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        detached: false,
-      });
-
-      attachGameProcessListeners(proc, `Client${i + 1}`);
-      gameProcesses.push(proc);
-      proc.on('exit', () => {
-        gameProcesses = gameProcesses.filter(p => p !== proc);
-        if (gameProcesses.length === 0) {
-          gameRunning = false;
-          connected = false;
-          socket?.destroy();
-        }
-      });
+  serverProcess.stderr?.on('data', (data) => {
+    const line = data.toString().trim();
+    if (line) {
+      debugLogs.push(`[SERVER] ${line}`);
+      console.error(`[GAME] ${line}`);
     }
-  }
-
-  await new Promise(resolve => setTimeout(resolve, 2000));
-
-  return { content: [{ type: 'text', text: `Game started (${clients} client${clients > 1 ? 's' : ''})` }] };
-}
-
-function attachGameProcessListeners(proc, label) {
-  proc.stdout?.on('data', (data) => {
-    data.toString().split('\n').filter(l => l.trim()).forEach(line => {
-      debugLogs.push(`[${label}] ${line}`);
-      console.error(`[GAME/${label}] ${line}`);
-    });
   });
 
-  proc.stderr?.on('data', (data) => {
-    data.toString().split('\n').filter(l => l.trim()).forEach(line => {
-      debugLogs.push(`[${label}] ${line}`);
-      console.error(`[GAME/${label}] ${line}`);
-    });
+  serverProcess.on('exit', () => {
+    serverProcess = null;
   });
+
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  return { content: [{ type: 'text', text: `Game server started on port ${PORT}` }] };
 }
 
-async function evalCode(code) {
-  if (!code) {
-    return { content: [{ type: 'text', text: 'Code parameter is required' }], isError: true };
+async function stopServer() {
+  if (!serverProcess) {
+    return { content: [{ type: 'text', text: 'No server running' }] };
   }
 
-  return new Promise((resolve) => {
-    const request = JSON.stringify({ code }) + '\n';
-    const sock = createConnection(9999, '127.0.0.1');
-    let buffer = '';
-    let done = false;
-
-    const finish = (result) => {
-      if (!done) {
-        done = true;
-        sock.destroy();
-        resolve(result);
-      }
-    };
-
-    sock.write(request);
-
-    sock.on('data', (chunk) => {
-      buffer += chunk.toString();
-      const jsonStart = buffer.indexOf('{');
-      if (jsonStart > 0) {
-        buffer = buffer.substring(jsonStart);
-      }
-      const lines = buffer.split('\n');
-
-      for (let i = 0; i < lines.length - 1; i++) {
-        const line = lines[i].trim();
-        if (line) {
-          try {
-            const res = JSON.parse(line);
-            if (res.success) {
-              finish({ content: [{ type: 'text', text: `Result: ${res.result}` }] });
-            } else {
-              finish({ content: [{ type: 'text', text: `Error: ${res.error}` }], isError: true });
-            }
-            return;
-          } catch (e) {}
-        }
-      }
-      buffer = lines[lines.length - 1];
-    });
-
-    sock.on('error', () => {
-      finish({ content: [{ type: 'text', text: 'Cannot connect to REPL' }], isError: true });
-    });
-
-    setTimeout(() => {
-      finish({ content: [{ type: 'text', text: 'REPL timeout' }], isError: true });
-    }, 3000);
-  });
+  serverProcess.kill();
+  serverProcess = null;
+  return { content: [{ type: 'text', text: 'Game server stopped' }] };
 }
 
-async function stopEditor() {
-  if (!editorProcess) {
-    return { content: [{ type: 'text', text: 'No editor running' }] };
+async function queryAPI(endpoint, method = 'GET', body = null) {
+  try {
+    const opts = { method };
+    if (body) opts.body = JSON.stringify(body);
+    if (body) opts.headers = { 'Content-Type': 'application/json' };
+
+    const res = await fetch(`${API_BASE}/api${endpoint}`, opts);
+    const data = await res.json();
+
+    if (!res.ok) {
+      return { content: [{ type: 'text', text: `Error: ${data.error}` }], isError: true };
+    }
+
+    return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Cannot reach server: ${e.message}` }], isError: true };
+  }
+}
+
+async function getStatus() {
+  return queryAPI('/status');
+}
+
+async function listActors() {
+  return queryAPI('/actors');
+}
+
+async function getActor(name) {
+  return queryAPI(`/actor/${name}`);
+}
+
+async function getStage(num) {
+  return queryAPI(`/level/${num}`);
+}
+
+async function listStages() {
+  return queryAPI('/levels');
+}
+
+async function loadStage(num) {
+  return queryAPI(`/stage/${num}`, 'POST');
+}
+
+async function spawnEntity(type, x, y) {
+  return queryAPI(`/spawn/${type}`, 'POST', { x, y });
+}
+
+async function editLevel(num) {
+  const levelPath = join(projectRoot, 'game', `levels/stage${num}.json`);
+  if (!existsSync(levelPath)) {
+    return { content: [{ type: 'text', text: `Level ${num} not found` }], isError: true };
   }
 
-  editorProcess.kill();
-  editorProcess = null;
-  if (gameProcess) {
-    gameProcess.kill();
-    gameProcess = null;
-  }
-  gameProcesses.forEach(proc => proc.kill());
-  gameProcesses = [];
-  gameRunning = false;
-  connected = false;
-  socket?.destroy();
+  const data = readFileSync(levelPath, 'utf8');
+  console.error(`[MCP] Open level ${num} in editor: ${levelPath}`);
 
-  return { content: [{ type: 'text', text: 'Godot editor stopped' }] };
+  return {
+    content: [{
+      type: 'text',
+      text: `Stage ${num} JSON:\n\n${data}`
+    }]
+  };
+}
+
+async function saveLevelEdit(num, jsonStr) {
+  try {
+    const parsed = JSON.parse(jsonStr);
+    const levelPath = join(projectRoot, 'game', `levels/stage${num}.json`);
+    writeFileSync(levelPath, JSON.stringify(parsed, null, 2), 'utf8');
+    return { content: [{ type: 'text', text: `Stage ${num} saved successfully` }] };
+  } catch (e) {
+    return { content: [{ type: 'text', text: `Invalid JSON: ${e.message}` }], isError: true };
+  }
 }
 
 const server = new Server(
-  { name: 'godot-mcp', version: '0.1.0' },
+  { name: 'goto-mcp', version: '1.0.0' },
   { capabilities: { tools: {} } }
 );
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [
     {
-      name: 'launch_editor',
-      description: 'Launch Godot editor for the project',
+      name: 'start_server',
+      description: 'Start the game server (Node.js + WebSocket)',
+      inputSchema: { type: 'object', properties: {}, required: [] }
+    },
+    {
+      name: 'stop_server',
+      description: 'Stop the running game server',
+      inputSchema: { type: 'object', properties: {}, required: [] }
+    },
+    {
+      name: 'status',
+      description: 'Get current game status (frame, stage, players, actors)',
+      inputSchema: { type: 'object', properties: {}, required: [] }
+    },
+    {
+      name: 'list_actors',
+      description: 'List all actors with positions and velocities',
+      inputSchema: { type: 'object', properties: {}, required: [] }
+    },
+    {
+      name: 'get_actor',
+      description: 'Get detailed state of a specific actor',
       inputSchema: {
         type: 'object',
         properties: {
-          projectPath: {
-            type: 'string',
-            description: 'Path to Godot project directory',
-            default: projectPath,
-          },
+          name: { type: 'string', description: 'Actor name (e.g., player_1, enemy_5)' }
         },
-        required: [],
-      },
+        required: ['name']
+      }
     },
     {
-      name: 'run_project',
-      description: 'Run the Godot project (start the game in editor)',
+      name: 'load_stage',
+      description: 'Load a specific stage (1-4)',
       inputSchema: {
         type: 'object',
         properties: {
-          projectPath: {
-            type: 'string',
-            description: 'Path to Godot project directory',
-            default: projectPath,
-          },
-          clients: {
-            type: 'number',
-            description: 'Number of game clients to launch (1 for single, >1 for multiplayer testing)',
-            default: 1,
-          },
+          stage: { type: 'number', description: 'Stage number (1-4)' }
         },
-        required: [],
-      },
+        required: ['stage']
+      }
     },
     {
-      name: 'stop_editor',
-      description: 'Stop the Godot editor',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-        required: [],
-      },
+      name: 'list_stages',
+      description: 'List all available stages with metadata',
+      inputSchema: { type: 'object', properties: {}, required: [] }
     },
     {
-      name: 'eval_code',
-      description: 'Evaluate GDScript code in the running game',
+      name: 'get_stage',
+      description: 'Get full JSON definition of a stage',
       inputSchema: {
         type: 'object',
         properties: {
-          code: {
-            type: 'string',
-            description: 'GDScript code to evaluate',
-          },
+          num: { type: 'number', description: 'Stage number (1-4)' }
         },
-        required: ['code'],
-      },
+        required: ['num']
+      }
+    },
+    {
+      name: 'spawn_entity',
+      description: 'Spawn an entity at position (for testing)',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          type: { type: 'string', description: 'Entity type (player, enemy, platform, breakable_platform)' },
+          x: { type: 'number', description: 'X position', default: 640 },
+          y: { type: 'number', description: 'Y position', default: 360 }
+        },
+        required: ['type']
+      }
+    },
+    {
+      name: 'edit_level',
+      description: 'Get level JSON for editing',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          num: { type: 'number', description: 'Stage number (1-4)' }
+        },
+        required: ['num']
+      }
+    },
+    {
+      name: 'save_level_edit',
+      description: 'Save edited level JSON',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          num: { type: 'number', description: 'Stage number (1-4)' },
+          json: { type: 'string', description: 'Updated JSON content' }
+        },
+        required: ['num', 'json']
+      }
     },
     {
       name: 'debug_logs',
-      description: 'Get debug output from the running game',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-        required: [],
-      },
-    },
-  ],
+      description: 'Get server debug output',
+      inputSchema: { type: 'object', properties: {}, required: [] }
+    }
+  ]
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args } = request.params;
 
   switch (name) {
-    case 'launch_editor':
-      return launchEditor(args?.projectPath || projectPath);
-    case 'run_project':
-      return runProject(args?.projectPath || projectPath, args?.clients || 1);
-    case 'stop_editor':
-      return stopEditor();
-    case 'eval_code':
-      return evalCode(args?.code);
+    case 'start_server':
+      return startServer();
+    case 'stop_server':
+      return stopServer();
+    case 'status':
+      return getStatus();
+    case 'list_actors':
+      return listActors();
+    case 'get_actor':
+      return getActor(args?.name);
+    case 'load_stage':
+      return loadStage(args?.stage);
+    case 'list_stages':
+      return listStages();
+    case 'get_stage':
+      return getStage(args?.num);
+    case 'spawn_entity':
+      return spawnEntity(args?.type, args?.x || 640, args?.y || 360);
+    case 'edit_level':
+      return editLevel(args?.num);
+    case 'save_level_edit':
+      return saveLevelEdit(args?.num, args?.json);
     case 'debug_logs':
       return { content: [{ type: 'text', text: debugLogs.join('\n') || 'No logs' }] };
     default:
@@ -332,4 +284,4 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
-console.error('[SERVER] Godot MCP ready');
+console.error('[MCP] GOTO game server ready');

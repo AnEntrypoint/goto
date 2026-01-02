@@ -1,22 +1,23 @@
 {
-  "name": "godot-mcp",
-  "version": "0.1.0",
-  "description": "Claude Code MCP server for Godot game development with live REPL",
+  "name": "goto-mcp",
+  "version": "1.0.0",
+  "description": "Claude Code MCP server for GOTO game development with CLI API access",
   "type": "module",
   "bin": {
-    "godot-mcp": "./index.js"
+    "goto-mcp": "./index.js"
   },
   "files": [
     "index.js"
   ],
   "dependencies": {
-    "@modelcontextprotocol/sdk": "0.6.0"
+    "@modelcontextprotocol/sdk": "0.6.0",
+    "node-fetch": "^3.3.0"
   },
   "license": "MIT",
   "keywords": [
-    "godot",
+    "goto",
+    "ice-climber",
     "mcp",
-    "repl",
     "game-dev",
     "claude-code"
   ]
