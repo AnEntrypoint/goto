@@ -694,10 +694,7 @@ class PhysicsGame {
       console.error(`[RESTART] Reloading stage ${this.stage} after 3 seconds`);
       this.loadStage(this.stage);
       this.stage_over = false;
-      this.clients.forEach((client) => {
-        const spawnPos = this.getSpawnPosition(client.playerId);
-        this.spawn('player', spawnPos, { player_id: client.playerId });
-      });
+      this.nextStageClients();
     }
   }
 
@@ -737,9 +734,9 @@ class PhysicsGame {
       this.lastActorState.set(name, serializeActorState(actor));
     }
     if (this.lastActorState.size > 1000) {
-      const activeNames = new Set(this.actors.keys());
       for (const [name] of this.lastActorState) {
-        if (!activeNames.has(name)) {
+        const actor = this.actors.get(name);
+        if (!actor || actor.state.removed) {
           this.lastActorState.delete(name);
         }
       }
@@ -946,12 +943,14 @@ wss.on('connection', (ws) => {
           }
         }
       } else if (action === 'resume') {
-        game.pausedPlayers.delete(playerId);
-        const connectedCount = Array.from(game.pausedPlayers).filter(pid => game.clients.has(pid)).length;
-        const anyConnectedPaused = connectedCount > 0;
-        if (!anyConnectedPaused && game.clients.size > 0) {
-          game.paused = false;
-          game.broadcastToClients(buildResumeMessage());
+        if (game.clients.has(playerId)) {
+          game.pausedPlayers.delete(playerId);
+          const connectedCount = Array.from(game.pausedPlayers).filter(pid => game.clients.has(pid)).length;
+          const anyConnectedPaused = connectedCount > 0;
+          if (!anyConnectedPaused && game.clients.size > 0) {
+            game.paused = false;
+            game.broadcastToClients(buildResumeMessage());
+          }
         }
       }
     } catch (e) {
@@ -989,7 +988,7 @@ wss.on('connection', (ws) => {
 app.get('/api/status', (req, res) => {
   const players = [];
   for (const [playerId, actor] of game.playerActors) {
-    if (!game.actors.has(actor.name)) continue;
+    if (!game.actors.has(actor.name) || actor.state.removed) continue;
     const p = {
       id: actor.state.player_id,
       pos: [actor.body.position.x, actor.body.position.y],
@@ -1135,7 +1134,14 @@ app.get('/api/stats', (req, res) => {
 
   const platforms = Array.from(game.actors.values())
     .filter(a => !a.state.removed && a.type.includes('platform'))
-    .map(p => ({ name: p.name, hits: p.state.hit_count, max_hits: p.state.max_hits }));
+    .map(p => {
+      const obj = { name: p.name, type: p.type };
+      if (p.type === 'breakable_platform') {
+        obj.hits = p.state.hit_count;
+        obj.max_hits = p.state.max_hits;
+      }
+      return obj;
+    });
 
   const enemies = Array.from(game.actors.values())
     .filter(a => !a.state.removed && a.type === 'enemy').length;
