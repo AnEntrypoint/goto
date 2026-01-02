@@ -20,14 +20,16 @@ const PORT = process.env.PORT || 3008;
 
 async function startServer() {
   if (serverProcess) {
-    return { content: [{ type: 'text', text: 'Server already running' }] };
+    serverProcess.kill('SIGTERM');
+    await new Promise(resolve => setTimeout(resolve, 500));
   }
 
+  debugLogs = [];
   console.error(`[MCP] Starting game server on port ${PORT}...`);
   serverProcess = spawn('node', [join(serverDir, 'index.js')], {
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false,
-    env: { ...process.env, PORT }
+    env: { ...process.env, PORT, NODE_ENV: 'development' }
   });
 
   serverProcess.stdout?.on('data', (data) => {
@@ -59,8 +61,13 @@ async function stopServer() {
     return { content: [{ type: 'text', text: 'No server running' }] };
   }
 
-  serverProcess.kill();
+  serverProcess.kill('SIGTERM');
+  await new Promise(resolve => setTimeout(resolve, 500));
+  if (serverProcess && !serverProcess.killed) {
+    serverProcess.kill('SIGKILL');
+  }
   serverProcess = null;
+  debugLogs = [];
   return { content: [{ type: 'text', text: 'Game server stopped' }] };
 }
 
