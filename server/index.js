@@ -209,16 +209,13 @@ class PhysicsGame {
         max_hits: extra.max_hits || 3,
         width: extra.width || 32,
         removed: false,
-        _landed_this_frame: false,
-        _pending_jump: false,
         _coyote_counter: 0,
         lives: type === 'player' ? 3 : 0,
         deaths: 0,
         respawn_time: 0,
         invulnerable: 0,
         score: 0,
-        stage_time: 0,
-        _last_vel_y: 0
+        stage_time: 0
       }
     };
 
@@ -397,12 +394,15 @@ class PhysicsGame {
     const checked = new Set();
     let checkCount = 0;
     let hitCount = 0;
+    const contactingPlatforms = new Map();
 
     // Log first 100 frames to see what's happening
     const verbose = this.frame < 100;
 
     for (const [nameA, actorA] of this.actors) {
-      actorA.state._landed_this_frame = false;
+      if (actorA.type === 'player' || actorA.type === 'enemy') {
+        contactingPlatforms.set(nameA, []);
+      }
 
       for (const [nameB, actorB] of this.actors) {
         if (nameA === nameB) continue;
@@ -479,9 +479,12 @@ class PhysicsGame {
               }
               movingBody.velocity.y = 0;
               movingBody.position.y = platformBody.position.y - (movingBody._height || 32) / 2 - (platformBody._height || 16) / 2;
-              movingActor.state.on_ground = true;
-              movingActor.state._landed_this_frame = true;
               movingActor.state._coyote_counter = 0;
+
+              // Track contact for on_ground determination
+              if (contactingPlatforms.has(movingActor.name)) {
+                contactingPlatforms.get(movingActor.name).push(platformActor.name);
+              }
 
               if (platformActor.type === 'breakable_platform') {
                 const alreadyHit = platformActor.state._broken_by === movingActor.name;
@@ -503,9 +506,13 @@ class PhysicsGame {
           }
         }
       }
+    }
 
-      if (!actorA.state._landed_this_frame && (actorA.type === 'player' || actorA.type === 'enemy')) {
-        actorA.state.on_ground = false;
+    // Set on_ground based on actual platform contact
+    for (const [actorName, contactList] of contactingPlatforms) {
+      const actor = this.actors.get(actorName);
+      if (actor) {
+        actor.state.on_ground = contactList.length > 0;
       }
     }
 
