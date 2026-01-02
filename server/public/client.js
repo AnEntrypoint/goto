@@ -556,7 +556,7 @@ class GameClient {
       this.lastServerX = player.pos[0];
     }
 
-    const speed = 200;
+    const speed = 200; // Pixels per second (matches server PLAYER_SPEED)
     const deltaX = direction * speed * (1/60);
     this.predictedPos[0] += deltaX;
   }
