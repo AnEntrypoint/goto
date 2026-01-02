@@ -546,7 +546,7 @@ class PhysicsGame {
           if (actorB.type === 'enemy' && actorA.type === 'player') {
             if (actorA.state.invulnerable <= 0) {
               actorA.state.deaths++;
-              actorA.state.lives--;
+              actorA.state.lives = Math.max(0, actorA.state.lives - 1);
               actorA.state.respawn_time = PHYSICS.RESPAWN_TIME;
               actorA.state.invulnerable = PHYSICS.INVULNERABILITY_TIME;
             }
