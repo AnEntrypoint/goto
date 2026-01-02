@@ -170,9 +170,13 @@ class PhysicsGame {
       }
     }
     if (this.level.enemies) {
+      console.error(`[LEVEL] Loading ${this.level.enemies.length} enemies`);
       for (const e of this.level.enemies) {
+        console.error(`[LEVEL] Spawning enemy at [${e.x}, ${e.y}] with speed=${e.speed}, dir=${e.dir}`);
         this.spawn('enemy', [e.x, e.y], { speed: e.speed || 100, patrol_dir: e.dir || -1 });
       }
+    } else {
+      console.error(`[LEVEL] No enemies in level (level.enemies=${this.level.enemies})`);
     }
   }
 
@@ -229,6 +233,10 @@ class PhysicsGame {
       console.error(`[SPAWN] Player ${extra.player_id} spawned as ${actor.name} (net_id=${actor.net_id})`);
     }
 
+    if (type === 'enemy') {
+      console.error(`[SPAWN] Enemy ${actor.name} spawned at [${actor.body.position.x}, ${actor.body.position.y}] vel=[${actor.body.velocity.x}, ${actor.body.velocity.y}]`);
+    }
+
     return actor;
   }
 
@@ -266,6 +274,8 @@ class PhysicsGame {
         const dir = input.direction || 0;
         if (dir === 0) {
           this.heldInput.delete(playerId);
+          const actor = this.playerActors.get(playerId);
+          if (actor) actor.body.velocity.x = 0;
         } else {
           this.heldInput.set(playerId, { action: 'move', direction: dir });
         }
@@ -274,6 +284,7 @@ class PhysicsGame {
         if (actor && (actor.state.on_ground || actor.state._coyote_counter < 6)) {
           actor.body.velocity.y = PHYSICS.JUMP_VELOCITY;
           actor.state._coyote_counter = 6;
+          actor.state._jump_frame = this.frame;
         }
       }
     }
@@ -367,6 +378,10 @@ class PhysicsGame {
             (actor.body.position.x > maxBound - turnDistance && dir > 0)) {
           actor.state.patrol_dir *= -1;
         }
+
+        if (this.frame < 5) {
+          console.error(`[ENEMY] ${actor.name} frame ${this.frame}: pos=[${actor.body.position.x.toFixed(1)}, ${actor.body.position.y.toFixed(1)}] vel=[${actor.body.velocity.x.toFixed(1)}, ${actor.body.velocity.y.toFixed(1)}] og=${actor.state.on_ground}`);
+        }
       }
 
       if ((actor.type === 'player' || actor.type === 'enemy') && !actor.state.on_ground) {
@@ -382,6 +397,7 @@ class PhysicsGame {
       }
 
       if (actor.body.position.y > 750) {
+        console.error(`[FALL] ${actor.type} ${actor.name} fell below Y=750 at Y=${actor.body.position.y.toFixed(1)}`);
         if (actor.type === 'player') {
           console.error(`[FALL] Player ${actor.state.player_id} fell below Y=750 at Y=${actor.body.position.y.toFixed(1)}`);
         }
@@ -438,6 +454,9 @@ class PhysicsGame {
 
         if (aabbHits) {
           hitCount++;
+          if (this.frame < 5 && (nameA === 'enemy_15' || nameB === 'enemy_15')) {
+            console.error(`[HIT] Frame ${this.frame}: ${nameA} collided with ${nameB}`);
+          }
           if (this.frame % 60 === 0) {
             console.error(`[HIT] ${nameA} collided with ${nameB}`);
           }
@@ -515,7 +534,11 @@ class PhysicsGame {
     for (const [actorName, contactList] of contactingPlatforms) {
       const actor = this.actors.get(actorName);
       if (actor) {
-        actor.state.on_ground = contactList.length > 0;
+        // Skip on_ground reset for 1 frame after jump to let gravity take effect
+        const jumpedThisFrame = actor.state._jump_frame === this.frame;
+        if (!jumpedThisFrame) {
+          actor.state.on_ground = contactList.length > 0;
+        }
       }
     }
 
@@ -559,6 +582,7 @@ class PhysicsGame {
   removeDeadActors() {
     for (const [name, actor] of this.actors) {
       if (actor.state.removed) {
+        console.error(`[REMOVE] Removing ${actor.type} ${name} (removed=true)`);
         if (actor.type === 'player') {
           console.error(`[REMOVE] Removing player ${actor.state.player_id} (${name})`);
           this.playerActors.delete(actor.state.player_id);
