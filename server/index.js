@@ -198,7 +198,13 @@ class PhysicsGame {
     this.stage = stageNum;
     const savedPlayers = new Map();
     for (const [playerId, actor] of this.playerActors) {
-      savedPlayers.set(playerId, { player_id: playerId });
+      savedPlayers.set(playerId, {
+        player_id: playerId,
+        lives: actor.state.lives,
+        score: actor.state.score,
+        deaths: actor.state.deaths,
+        stage_time: actor.state.stage_time
+      });
     }
     this.actors.clear();
     this.playerActors.clear();
@@ -235,9 +241,16 @@ class PhysicsGame {
       }
     }
 
-    for (const [playerId, _] of savedPlayers) {
+    for (const [playerId, playerState] of savedPlayers) {
       const spawnPos = this.getSpawnPosition(playerId);
-      this.spawn('player', spawnPos, { player_id: playerId });
+      const playerSpawnExtra = {
+        player_id: playerId,
+        lives: playerState.lives,
+        score: playerState.score,
+        deaths: playerState.deaths,
+        stage_time: playerState.stage_time
+      };
+      this.spawn('player', spawnPos, playerSpawnExtra);
     }
   }
 
@@ -694,29 +707,57 @@ class PhysicsGame {
       stats.windowStartTime = now;
     }
 
-    this.clients.forEach((client) => {
-      if (client && client.ws && client.ws.readyState === WebSocket.OPEN) {
-        try {
-          client.ws.send(msg);
-        } catch (e) {
-          console.error('Broadcast error:', e.message);
+    const deadClients = [];
+    this.clients.forEach((client, playerId) => {
+      if (client && client.ws) {
+        if (client.ws.readyState === WebSocket.OPEN) {
+          try {
+            client.ws.send(msg);
+          } catch (e) {
+            console.error(`Broadcast error for player ${playerId}:`, e.message);
+            deadClients.push(playerId);
+          }
+        } else if (client.ws.readyState === WebSocket.CLOSED) {
+          deadClients.push(playerId);
         }
+      } else {
+        deadClients.push(playerId);
       }
     });
+    for (const playerId of deadClients) {
+      this.clients.delete(playerId);
+      this.heldInput.delete(playerId);
+      this.pendingInput.delete(playerId);
+      this.pausedPlayers.delete(playerId);
+    }
   }
 
   nextStageClients() {
-    this.clients.forEach((client) => {
-      if (client && client.ws && client.ws.readyState === WebSocket.OPEN) {
-        const actors = Array.from(this.actors.values()).map(a => serializeActorFull(a));
-        const msg = buildStageloadMessage(this.stage, this.level.name, this.level.goal, actors);
-        try {
-          client.ws.send(JSON.stringify(msg));
-        } catch (e) {
-          console.error('Stage load error:', e.message);
+    const deadClients = [];
+    const actors = Array.from(this.actors.values()).map(a => serializeActorFull(a));
+    const msg = buildStageloadMessage(this.stage, this.level.name, this.level.goal, actors);
+    this.clients.forEach((client, playerId) => {
+      if (client && client.ws) {
+        if (client.ws.readyState === WebSocket.OPEN) {
+          try {
+            client.ws.send(JSON.stringify(msg));
+          } catch (e) {
+            console.error(`Stage load error for player ${playerId}:`, e.message);
+            deadClients.push(playerId);
+          }
+        } else if (client.ws.readyState === WebSocket.CLOSED) {
+          deadClients.push(playerId);
         }
+      } else {
+        deadClients.push(playerId);
       }
     });
+    for (const playerId of deadClients) {
+      this.clients.delete(playerId);
+      this.heldInput.delete(playerId);
+      this.pendingInput.delete(playerId);
+      this.pausedPlayers.delete(playerId);
+    }
   }
 
   nextStage() {
