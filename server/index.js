@@ -1068,8 +1068,12 @@ app.get('/api/levels', (req, res) => {
   const levels = [1, 2, 3, 4].map(n => {
     const filePath = path.join(__dirname, '..', 'game', `levels/stage${n}.json`);
     if (!fs.existsSync(filePath)) return null;
-    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    return { stage: n, name: data.name, platforms: data.platforms.length, enemies: data.enemies.length };
+    try {
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      return { stage: n, name: data.name || `Stage ${n}`, platforms: (data.platforms || []).length, enemies: (data.enemies || []).length };
+    } catch (e) {
+      return null;
+    }
   }).filter(Boolean);
   res.json(levels);
 });
@@ -1079,7 +1083,12 @@ app.get('/api/level/:num', (req, res) => {
   if (isNaN(num) || num < 1 || num > 4) return res.status(400).json({ error: 'Invalid stage' });
   const filePath = path.join(__dirname, '..', 'game', `levels/stage${num}.json`);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Level not found' });
-  res.json(JSON.parse(fs.readFileSync(filePath, 'utf8')));
+  try {
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: 'Invalid level format' });
+  }
 });
 
 app.get('/api/stats', (req, res) => {
