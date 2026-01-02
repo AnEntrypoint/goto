@@ -230,17 +230,11 @@ class PhysicsGame {
       }
     };
 
-    console.error(`[SPAWN] Adding ${type} as "${actor.name}" to actors map (actor: ${JSON.stringify({name:actor.name, type, player_id:actor.state.player_id})})`);
     this.actors.set(actor.name, actor);
-    console.error(`[SPAWN] Actors map size after add: ${this.actors.size}`);
-    if (type === 'enemy') {
-      console.error(`[SPAWN] Enemy ${actor.name} spawned at (${pos[0].toFixed(0)}, ${pos[1].toFixed(0)}) on_ground=${actor.state.on_ground} speed=${actor.state.speed}`);
-    }
     this.bodies.set(actor.name, body);
 
     if (type === 'player' && extra.player_id) {
       this.playerActors.set(extra.player_id, actor);
-      console.error(`[SPAWN] Player ${extra.player_id} spawned as ${actor.name} (net_id=${actor.net_id})`);
     }
 
     return actor;
@@ -298,16 +292,10 @@ class PhysicsGame {
 
     for (const [playerId, input] of this.heldInput) {
       const actor = this.playerActors.get(playerId);
-      if (!actor) {
-        console.error(`[INPUT] Player ${playerId} actor not found`);
-        continue;
-      }
+      if (!actor) continue;
       if (input.action === 'move') {
         const vel = input.direction * actor.state.speed;
         actor.body.velocity.x = vel;
-        if (this.frame % 60 === 0) {
-          console.error(`[INPUT] Player ${playerId}: setting velocity.x = ${vel} (dir=${input.direction}, speed=${actor.state.speed}), body.pos.x=${actor.body.position.x.toFixed(1)}`);
-        }
       }
     }
   }
@@ -346,9 +334,6 @@ class PhysicsGame {
 
       if (actor.state.respawn_time > 0) {
         actor.state.respawn_time -= TICK_MS / 1000;
-        if (this.frame % 30 === 0) {
-          console.error(`[RESPAWN] Player ${actor.state.player_id}: respawn_time=${actor.state.respawn_time.toFixed(1)}s`);
-        }
 
         if (actor.state.respawn_time <= 0 && actor.state.respawn_time > -0.016) {
           const spawnPos = this.getSpawnPosition(actor.state.player_id);
@@ -358,7 +343,6 @@ class PhysicsGame {
           actor.body.velocity.y = 0;
           actor.state.respawn_time = -1;
           actor.state.on_ground = true;
-          console.error(`[RESPAWN] Player ${actor.state.player_id} respawned at [${spawnPos[0].toFixed(1)}, ${spawnPos[1].toFixed(1)}]`);
         }
       }
 
@@ -399,9 +383,6 @@ class PhysicsGame {
       }
 
       if (actor.body.position.y > 750) {
-        if (actor.type === 'player') {
-          console.error(`[FALL] Player ${actor.state.player_id} fell below Y=750 at Y=${actor.body.position.y.toFixed(1)}`);
-        }
         actor.state.removed = true;
       }
     }
@@ -409,12 +390,7 @@ class PhysicsGame {
 
   checkCollisions() {
     const checked = new Set();
-    let checkCount = 0;
-    let hitCount = 0;
     const contactingPlatforms = new Map();
-
-    // Log first 100 frames to see what's happening
-    const verbose = this.frame < 100;
 
     for (const [nameA, actorA] of this.actors) {
       if (actorA.type === 'player' || actorA.type === 'enemy') {
@@ -423,53 +399,27 @@ class PhysicsGame {
     }
 
     for (const [nameA, actorA] of this.actors) {
-
       for (const [nameB, actorB] of this.actors) {
         if (nameA === nameB) continue;
 
         const pairKey = [nameA, nameB].sort().join('|');
         if (checked.has(pairKey)) continue;
         checked.add(pairKey);
-        checkCount++;
 
         const bodyA = actorA.body;
         const bodyB = actorB.body;
-
         const aabbHits = this.checkAABB(bodyA, bodyB);
 
-        // Debug first player-platform pair
-        if (verbose && nameA.includes('player') && nameB.includes('platform') && nameB === 'platform_1') {
-          const dx = Math.abs(bodyA.position.x - bodyB.position.x);
-          const dy = Math.abs(bodyA.position.y - bodyB.position.y);
-          console.error(`[DBG-${this.frame}] ${nameA}@(${bodyA.position.x.toFixed(0)},${bodyA.position.y.toFixed(0)}) vs ${nameB}@(${bodyB.position.x.toFixed(0)},${bodyB.position.y.toFixed(0)}) dx=${dx.toFixed(0)} dy=${dy.toFixed(0)} HIT=${aabbHits}`);
-        }
-        if (actorA.type === 'player' && actorB.type === 'platform' && this.frame % 120 === 0) {
-          const dx = Math.abs(bodyA.position.x - bodyB.position.x);
-          const dy = Math.abs(bodyA.position.y - bodyB.position.y);
-          const aW = (bodyA._width || 32) / 2;
-          const aH = (bodyA._height || 32) / 2;
-          const bW = (bodyB._width || 32) / 2;
-          const bH = (bodyB._height || 16) / 2;
-          console.error(`[AABB] ${nameA}@(${bodyA.position.x.toFixed(0)},${bodyA.position.y.toFixed(0)}) vs ${nameB}@(${bodyB.position.x.toFixed(0)},${bodyB.position.y.toFixed(0)}) | dx=${dx.toFixed(1)}<${(aW+bW).toFixed(1)}? dy=${dy.toFixed(1)}<${(aH+bH).toFixed(1)}? hit=${aabbHits}`);
-        }
-
         if (aabbHits) {
-          hitCount++;
-          if (this.frame % 60 === 0) {
-            console.error(`[HIT] ${nameA} collided with ${nameB}`);
-          }
           if (actorB.type === 'enemy' && actorA.type === 'player') {
-            console.error(`[COLLISION] Player ${actorA.name} hit by enemy ${actorB.name} at distance dx=${Math.abs(bodyA.position.x - bodyB.position.x).toFixed(1)}, dy=${Math.abs(bodyA.position.y - bodyB.position.y).toFixed(1)}`);
             if (actorA.state.invulnerable <= 0) {
               actorA.state.deaths++;
               actorA.state.lives--;
               actorA.state.respawn_time = PHYSICS.RESPAWN_TIME;
               actorA.state.invulnerable = PHYSICS.INVULNERABILITY_TIME;
-              console.error(`[DEATH] Player ${actorA.state.player_id} died (lives left: ${actorA.state.lives})`);
             }
           }
 
-          // Handle player/enemy landing on platform (check both directions)
           let movingActor, platformActor, movingBody, platformBody;
           if ((actorA.type === 'player' || actorA.type === 'enemy') && (actorB.type === 'platform' || actorB.type === 'breakable_platform')) {
             movingActor = actorA;
@@ -494,13 +444,9 @@ class PhysicsGame {
             const restingOnPlatform = playerBottom > platformTop - 2 && playerBottom < platformBot + 2;
 
             if (landingFromAbove || restingOnPlatform) {
-              if (movingActor.type === 'enemy') {
-                console.error(`[COLLISION] Enemy ${movingActor.name} landed on platform ${platformActor.name} at (${movingBody.position.x.toFixed(0)}, ${movingBody.position.y.toFixed(0)}) landing=${landingFromAbove} resting=${restingOnPlatform}`);
-              }
               movingBody.velocity.y = 0;
               movingActor.state._coyote_counter = 0;
 
-              // Track contact for on_ground determination
               if (!contactingPlatforms.has(movingActor.name)) {
                 contactingPlatforms.set(movingActor.name, []);
               }
@@ -516,13 +462,11 @@ class PhysicsGame {
                   platformActor.state.hit_count++;
                   if (movingActor.type === 'player') {
                     movingActor.state.score += 10;
-                    console.error(`[SCORE] Player ${movingActor.state.player_id} scored +10 (total: ${movingActor.state.score}) for damaging platform ${platformActor.name}`);
                   }
                 }
                 if (platformActor.state.hit_count >= platformActor.state.max_hits && !platformActor.state._confirmed_broken) {
                   platformActor.state._confirmed_broken = true;
                   platformActor.state.removed = true;
-                  console.error(`[BREAK] Platform ${platformActor.name} broke (${platformActor.state.hit_count}/${platformActor.state.max_hits} hits)`);
                 }
               }
             }
@@ -531,20 +475,11 @@ class PhysicsGame {
       }
     }
 
-    // Set on_ground based on actual platform contact
     for (const [actorName, contactList] of contactingPlatforms) {
       const actor = this.actors.get(actorName);
       if (actor) {
-        const newState = contactList.length > 0;
-        if (actor.type === 'enemy' && newState !== actor.state.on_ground) {
-          console.error(`[STATE] Enemy ${actorName} on_ground: ${actor.state.on_ground} → ${newState} (contacts: ${contactList.join(',')})`);
-        }
-        actor.state.on_ground = newState;
+        actor.state.on_ground = contactList.length > 0;
       }
-    }
-
-    if (this.frame % 120 === 0) {
-      console.error(`[COLLISION-STATS] Checked ${checkCount} pairs, ${hitCount} hits, actors=${this.actors.size}`);
     }
   }
 
@@ -716,21 +651,27 @@ class PhysicsGame {
     });
   }
 
+  nextStageClients() {
+    this.clients.forEach((client) => {
+      if (client && client.ws && client.ws.readyState === WebSocket.OPEN) {
+        const actors = Array.from(this.actors.values()).map(a => serializeActorFull(a));
+        const msg = buildStageloadMessage(this.stage, this.level.name, this.level.goal, actors);
+        try {
+          client.ws.send(msgpack.pack(msg));
+        } catch (e) {
+          console.error('Stage load error:', e.message);
+        }
+      }
+    });
+  }
+
   nextStage() {
     if (this.stage < 4) {
       this.pausedPlayers.clear();
       this.paused = false;
       this.loadStage(this.stage + 1);
-
-      const actors = Array.from(this.actors.values()).map(a => serializeActorFull(a));
-      const msg = buildStageloadMessage(this.stage, this.level.name, this.level.goal, actors);
-      this.clients.forEach((client) => {
-        if (client.ws.readyState === WebSocket.OPEN) {
-          client.ws.send(msgpack.pack(msg));
-        }
-      });
+      this.nextStageClients();
     } else if (this.stage === 4) {
-      console.error('[GAME] Stage 4 complete! All stages finished.');
       this.stage_over = true;
       this.stage_over_time = this.frame;
     }
@@ -754,6 +695,11 @@ const stats = {
   windowStartTime: Date.now()
 };
 
+app.use((req, res, next) => {
+  res.set('X-RateLimit-Limit', '1000');
+  res.set('X-RateLimit-Remaining', '999');
+  next();
+});
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -775,31 +721,27 @@ wss.on('connection', (ws) => {
       const data = JSON.parse(msg.toString());
       if (!data || typeof data !== 'object') return;
 
-      const action = data.action;
-      if (typeof action !== 'string') {
-        if (!data.action && typeof data.direction === 'number' && typeof data.action !== 'undefined') {
-          game.pendingInput.set(playerId, data);
-        }
-        return;
-      }
+      const { action, direction } = data;
 
-      if (action === 'nextstage') {
+      if (action === 'move') {
+        if (typeof direction === 'number') {
+          const dir = direction > 0 ? 1 : direction < 0 ? -1 : 0;
+          game.pendingInput.set(playerId, { action: 'move', direction: dir });
+        }
+      } else if (action === 'jump') {
+        game.pendingInput.set(playerId, { action: 'jump' });
+      } else if (action === 'nextstage') {
         game.nextStage();
       } else if (action === 'pause') {
         game.pausedPlayers.add(playerId);
         if (game.pausedPlayers.size === game.clients.size) {
           game.paused = true;
-          console.error(`[PAUSE] All ${game.clients.size} players paused`);
         }
       } else if (action === 'resume') {
         game.pausedPlayers.delete(playerId);
         if (game.pausedPlayers.size < game.clients.size) {
           game.paused = false;
-          console.error(`[RESUME] Game resumed (${game.clients.size - game.pausedPlayers.size} playing)`);
         }
-      } else if (action === 'move' || action === 'jump') {
-        if (typeof data.direction !== 'number' && action === 'move') return;
-        game.pendingInput.set(playerId, data);
       }
     } catch (e) {
       console.error('Parse error:', e.message);
@@ -814,10 +756,10 @@ wss.on('connection', (ws) => {
     }
     game.clients.delete(playerId);
     game.heldInput.delete(playerId);
+    game.pendingInput.delete(playerId);
     game.pausedPlayers.delete(playerId);
     if (game.pausedPlayers.size < game.clients.size && game.paused) {
       game.paused = false;
-      console.error(`[RESUME] Game resumed (player ${playerId} disconnected)`);
     }
   });
 
@@ -839,9 +781,6 @@ app.get('/api/stats', (req, res) => {
   });
 });
 
-app.get('/test-endpoint-123', (req, res) => {
-  res.json({ test: 'working', lives: 3, respawning: false });
-});
 
 app.get('/api/status', (req, res) => {
   const players = [];
@@ -855,7 +794,6 @@ app.get('/api/status', (req, res) => {
       lives: actor.state.lives,
       respawning: actor.state.respawn_time > 0
     };
-    console.error('[API-STATUS] Adding player:', p);
     players.push(p);
   }
   const response = {
@@ -865,7 +803,6 @@ app.get('/api/status', (req, res) => {
     actors: game.actors.size,
     players
   };
-  console.error('[API-STATUS] Sending response:', JSON.stringify(response));
   res.json(response);
 });
 
@@ -1034,40 +971,6 @@ app.get('/api/perf', (req, res) => {
   });
 });
 
-app.post('/api/stress/respawn-all', (req, res) => {
-  let respawned = 0;
-  for (const [id, actor] of game.playerActors) {
-    actor.state.deaths++;
-    actor.state.lives = Math.max(0, actor.state.lives - 1);
-    actor.state.respawn_time = PHYSICS.RESPAWN_TIME;
-    actor.state.invulnerable = PHYSICS.INVULNERABILITY_TIME;
-    respawned++;
-  }
-  res.json({ respawned, frame: game.frame });
-});
-
-app.post('/api/stress/spawn-enemies/:count', (req, res) => {
-  const count = Math.min(parseInt(req.params.count) || 1, 50);
-  for (let i = 0; i < count; i++) {
-    const x = 100 + Math.random() * 1080;
-    const y = 100 + Math.random() * 500;
-    game.spawn('enemy', [x, y], { speed: PHYSICS.ENEMY_SPEED });
-  }
-  res.json({ spawned: count, total_enemies: Array.from(game.actors.values()).filter(a => a.type === 'enemy').length });
-});
-
-app.post('/api/stress/break-platforms/:count', (req, res) => {
-  const count = Math.min(parseInt(req.params.count) || 1, 50);
-  const platforms = Array.from(game.actors.values()).filter(a => a.type === 'breakable_platform');
-  let broken = 0;
-  for (let i = 0; i < Math.min(count, platforms.length); i++) {
-    const p = platforms[i];
-    p.state.hit_count = p.state.max_hits;
-    p.state.removed = true;
-    broken++;
-  }
-  res.json({ broken, remaining: platforms.length - broken });
-});
 
 server.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
