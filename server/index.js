@@ -455,11 +455,11 @@ class PhysicsGame {
           actor.state.respawn_time = -1;
           actor.state.on_ground = true;
           actor.state.invulnerable = PHYSICS.INVULNERABILITY_TIME;
+        } else {
+          actor.state.invulnerable = PHYSICS.INVULNERABILITY_TIME;
         }
-      }
-
-      if (actor.state.invulnerable > 0) {
-        actor.state.invulnerable -= TICK_MS / 1000;
+      } else if (actor.state.invulnerable > 0) {
+        actor.state.invulnerable = Math.max(0, actor.state.invulnerable - TICK_MS / 1000);
       }
 
       actor.state.stage_time += TICK_MS / 1000;
@@ -869,7 +869,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 wss.on('connection', (ws) => {
   const playerId = getNextPlayerId();
-  const spawnPos = [500 + (playerId - 1) * 50, 664];
+  const spawnPos = game.getSpawnPosition(playerId);
   game.spawn('player', spawnPos, { player_id: playerId });
 
   const client = { ws, playerId };
