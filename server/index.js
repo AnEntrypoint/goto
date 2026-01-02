@@ -34,6 +34,25 @@ const PHYSICS = {
   RESPAWN_TIME: 5
 };
 
+const STATE_SCHEMAS = {
+  player: {
+    fields: ['player_id', 'on_ground', 'lives', 'deaths', 'respawn_time', 'invulnerable', 'score', 'stage_time', '_coyote_counter'],
+    defaults: { player_id: 0, on_ground: true, lives: 3, deaths: 0, respawn_time: 0, invulnerable: 0, score: 0, stage_time: 0, _coyote_counter: 0 }
+  },
+  enemy: {
+    fields: ['speed', 'patrol_dir', 'on_ground', '_coyote_counter'],
+    defaults: { speed: 120, patrol_dir: -1, on_ground: true, _coyote_counter: 0 }
+  },
+  platform: {
+    fields: ['width'],
+    defaults: { width: 32 }
+  },
+  breakable_platform: {
+    fields: ['width', 'hit_count', 'max_hits'],
+    defaults: { width: 32, hit_count: 0, max_hits: 3 }
+  }
+};
+
 function buildInitMessage(playerId, stage, levelName, goal, frame, actors) {
   return [MSG_TYPES.INIT, { playerId, stage, levelName, goal, frame, actors }];
 }
@@ -61,51 +80,84 @@ function computeStateChecksum(actors) {
     const y = Math.round(actor.body.position.y);
     const vx = Math.round(actor.body.velocity.x);
     const vy = Math.round(actor.body.velocity.y);
-    const lives = actor.state.lives || 0;
-    const score = actor.state.score || 0;
-    sum += (x + y + vx + vy + lives + score);
+    sum += (x + y + vx + vy);
+    if (actor.type === 'player') {
+      const lives = actor.state.lives || 0;
+      const score = actor.state.score || 0;
+      sum += (lives + score);
+    }
   }
   return sum & 0xFFFFFFFF;
 }
 
 function serializeActorState(actor) {
-  const lives = actor.state.lives !== undefined ? actor.state.lives : (actor.type === 'player' ? 3 : 0);
-  return {
+  const base = {
     n: actor.name,
     t: actor.type,
     x: Math.round(actor.body.position.x * 10) / 10,
     y: Math.round(actor.body.position.y * 10) / 10,
     vx: Math.round(actor.body.velocity.x * 10) / 10,
-    vy: Math.round(actor.body.velocity.y * 10) / 10,
-    w: actor.state.width,
-    p: actor.state.player_id || 0,
-    l: lives,
-    s: actor.state.score || 0,
-    d: actor.state.deaths || 0,
-    rt: Math.round(actor.state.respawn_time * 10) / 10,
-    iv: Math.round(actor.state.invulnerable * 100) / 100,
-    og: actor.state.on_ground ? 1 : 0,
-    hc: actor.state.hit_count || 0
+    vy: Math.round(actor.body.velocity.y * 10) / 10
   };
+
+  const state = actor.state;
+  if (actor.type === 'player') {
+    base.w = state.width || 32;
+    base.p = state.player_id || 0;
+    base.l = state.lives !== undefined ? state.lives : 3;
+    base.s = state.score || 0;
+    base.d = state.deaths || 0;
+    base.rt = Math.round((state.respawn_time || 0) * 10) / 10;
+    base.iv = Math.round((state.invulnerable || 0) * 100) / 100;
+    base.og = state.on_ground ? 1 : 0;
+  } else if (actor.type === 'enemy') {
+    base.og = state.on_ground ? 1 : 0;
+  } else if (actor.type === 'platform') {
+    base.w = state.width || 32;
+  } else if (actor.type === 'breakable_platform') {
+    base.w = state.width || 32;
+    base.hc = state.hit_count || 0;
+  }
+
+  return base;
 }
 
 function serializeActorFull(actor) {
-  return {
+  const base = {
     name: actor.name,
     type: actor.type,
     net_id: actor.net_id,
     pos: [actor.body.position.x, actor.body.position.y],
     vel: [actor.body.velocity.x, actor.body.velocity.y],
-    state: {
-      width: actor.state.width,
-      player_id: actor.state.player_id,
-      lives: actor.state.lives,
-      score: actor.state.score,
-      deaths: actor.state.deaths,
-      on_ground: actor.state.on_ground,
-      hit_count: actor.state.hit_count
-    }
+    state: {}
   };
+
+  const state = actor.state;
+  if (actor.type === 'player') {
+    base.state = {
+      width: state.width || 32,
+      player_id: state.player_id,
+      lives: state.lives,
+      score: state.score,
+      deaths: state.deaths,
+      on_ground: state.on_ground
+    };
+  } else if (actor.type === 'enemy') {
+    base.state = {
+      on_ground: state.on_ground
+    };
+  } else if (actor.type === 'platform') {
+    base.state = {
+      width: state.width || 32
+    };
+  } else if (actor.type === 'breakable_platform') {
+    base.state = {
+      width: state.width || 32,
+      hit_count: state.hit_count || 0
+    };
+  }
+
+  return base;
 }
 
 function serializeActorDelta(actor, lastState) {
@@ -188,6 +240,12 @@ class PhysicsGame {
   }
 
   spawn(type, pos, extra = {}) {
+    const schema = STATE_SCHEMAS[type];
+    if (!schema) {
+      console.error(`[SPAWN] Unknown actor type: ${type}`);
+      return null;
+    }
+
     const width = extra.width || 32;
     const height = (type === 'platform' || type === 'breakable_platform') ? 16 : 32;
     const isStatic = type === 'platform' || type === 'breakable_platform';
@@ -206,28 +264,28 @@ class PhysicsGame {
 
     World.add(this.engine.world, body);
 
+    const state = { removed: false };
+    for (const field of schema.fields) {
+      if (extra.hasOwnProperty(field)) {
+        state[field] = extra[field];
+      } else if (schema.defaults.hasOwnProperty(field)) {
+        state[field] = schema.defaults[field];
+      }
+    }
+    if (type === 'enemy' && !extra.speed) {
+      state.speed = PHYSICS.ENEMY_SPEED;
+    }
+    if (type === 'player' && !extra.speed) {
+      state.speed = PHYSICS.PLAYER_SPEED;
+    }
+    state.width = width;
+
     const actor = {
       name: body.label,
       type,
       net_id: this.nextNetId++,
       body,
-      state: {
-        player_id: extra.player_id,
-        speed: extra.speed || (type === 'player' ? PHYSICS.PLAYER_SPEED : PHYSICS.ENEMY_SPEED),
-        patrol_dir: extra.patrol_dir || -1,
-        on_ground: type === "player" || type === "enemy" ? true : false,
-        hit_count: 0,
-        max_hits: extra.max_hits || 3,
-        width: extra.width || 32,
-        removed: false,
-        _coyote_counter: 0,
-        lives: type === 'player' ? 3 : 0,
-        deaths: 0,
-        respawn_time: 0,
-        invulnerable: 0,
-        score: 0,
-        stage_time: 0
-      }
+      state
     };
 
     this.actors.set(actor.name, actor);
@@ -591,22 +649,7 @@ class PhysicsGame {
   }
 
   serializeActor(actor) {
-    return {
-      name: actor.name,
-      type: actor.type,
-      net_id: actor.net_id,
-      pos: [actor.body.position.x, actor.body.position.y],
-      vel: [actor.body.velocity.x, actor.body.velocity.y],
-      state: {
-        width: actor.state.width,
-        player_id: actor.state.player_id,
-        lives: actor.state.lives,
-        score: actor.state.score,
-        deaths: actor.state.deaths,
-        on_ground: actor.state.on_ground,
-        hit_count: actor.state.hit_count
-      }
-    };
+    return serializeActorFull(actor);
   }
 
   broadcastToClients(message) {
@@ -801,24 +844,40 @@ app.get('/api/status', (req, res) => {
 });
 
 app.get('/api/actors', (req, res) => {
-  res.json(Array.from(game.actors.values()).map(a => ({
-    name: a.name,
-    type: a.type,
-    pos: [a.body.position.x, a.body.position.y],
-    vel: [a.body.velocity.x, a.body.velocity.y],
-    state: a.state
-  })));
+  res.json(Array.from(game.actors.values()).map(a => {
+    let state = {};
+    if (a.type === 'player') {
+      state = { width: a.state.width, player_id: a.state.player_id, lives: a.state.lives, score: a.state.score, deaths: a.state.deaths, on_ground: a.state.on_ground };
+    } else if (a.type === 'enemy') {
+      state = { on_ground: a.state.on_ground };
+    } else if (a.type === 'platform') {
+      state = { width: a.state.width };
+    } else if (a.type === 'breakable_platform') {
+      state = { width: a.state.width, hit_count: a.state.hit_count };
+    }
+    return { name: a.name, type: a.type, pos: [a.body.position.x, a.body.position.y], vel: [a.body.velocity.x, a.body.velocity.y], state };
+  }));
 });
 
 app.get('/api/actor/:name', (req, res) => {
   const actor = game.actors.get(req.params.name);
   if (!actor) return res.status(404).json({ error: 'Actor not found' });
+  let state = {};
+  if (actor.type === 'player') {
+    state = { width: actor.state.width, player_id: actor.state.player_id, lives: actor.state.lives, score: actor.state.score, deaths: actor.state.deaths, on_ground: actor.state.on_ground };
+  } else if (actor.type === 'enemy') {
+    state = { on_ground: actor.state.on_ground };
+  } else if (actor.type === 'platform') {
+    state = { width: actor.state.width };
+  } else if (actor.type === 'breakable_platform') {
+    state = { width: actor.state.width, hit_count: actor.state.hit_count };
+  }
   res.json({
     name: actor.name,
     type: actor.type,
     pos: [actor.body.position.x, actor.body.position.y],
     vel: [actor.body.velocity.x, actor.body.velocity.y],
-    state: actor.state
+    state
   });
 });
 
@@ -904,19 +963,15 @@ app.get('/api/frame/:num', (req, res) => {
   res.json({
     frame: game.frame,
     stage: game.stage,
-    snapshot: Array.from(game.actors.values()).map(a => ({
-      name: a.name,
-      type: a.type,
-      pos: [a.body.position.x, a.body.position.y],
-      vel: [a.body.velocity.x, a.body.velocity.y],
-      state: {
-        lives: a.state.lives,
-        score: a.state.score,
-        respawn_time: a.state.respawn_time,
-        on_ground: a.state.on_ground,
-        hit_count: a.state.hit_count
+    snapshot: Array.from(game.actors.values()).map(a => {
+      let state = {};
+      if (a.type === 'player') {
+        state = { lives: a.state.lives, score: a.state.score, respawn_time: a.state.respawn_time, on_ground: a.state.on_ground };
+      } else if (a.type === 'breakable_platform') {
+        state = { hit_count: a.state.hit_count };
       }
-    }))
+      return { name: a.name, type: a.type, pos: [a.body.position.x, a.body.position.y], vel: [a.body.velocity.x, a.body.velocity.y], state };
+    })
   });
 });
 
