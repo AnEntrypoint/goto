@@ -126,6 +126,7 @@ function serializeActorState(actor) {
   } else if (actor.type === 'breakable_platform') {
     base.w = state.width || 32;
     base.hc = state.hit_count || 0;
+    base.mh = state.max_hits || 3;
   }
 
   return base;
@@ -464,6 +465,7 @@ class PhysicsGame {
           actor.body.velocity.y = 0;
           actor.state.respawn_time = -1;
           actor.state.on_ground = true;
+          actor.state._coyote_counter = 0;
           actor.state.invulnerable = PHYSICS.INVULNERABILITY_TIME;
         } else {
           actor.state.invulnerable = PHYSICS.INVULNERABILITY_TIME;
@@ -920,6 +922,7 @@ wss.on('connection', (ws) => {
       if (!data || typeof data !== 'object') return;
 
       const { action, direction } = data;
+      if (typeof action !== 'string') return;
 
       if (action === 'move') {
         if (typeof direction !== 'number') return;
