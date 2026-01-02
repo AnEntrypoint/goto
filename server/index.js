@@ -20,7 +20,8 @@ const MSG_TYPES = {
   SPAWN: 4,
   REMOVE: 5,
   PAUSE: 6,
-  RESUME: 7
+  RESUME: 7,
+  GAME_WON: 8
 };
 
 const PHYSICS = {
@@ -47,6 +48,10 @@ function buildGoalMessage(playerId, stage) {
 
 function buildStageloadMessage(stage, levelName, goal, actors) {
   return [MSG_TYPES.STAGELOAD, { stage, levelName, goal, actors }];
+}
+
+function buildGameWonMessage(totalScore) {
+  return [MSG_TYPES.GAME_WON, { totalScore }];
 }
 
 function serializeActorState(actor) {
@@ -459,10 +464,12 @@ class PhysicsGame {
       if (actor.state.removed) {
         if (actor.type === 'player') {
           console.error(`[REMOVE] Removing player ${actor.state.player_id} (${name})`);
+          this.playerActors.delete(actor.state.player_id);
         }
         World.remove(this.engine.world, actor.body);
         this.actors.delete(name);
         this.bodies.delete(name);
+        this.lastActorState.delete(name);
       }
     }
   }
@@ -495,6 +502,17 @@ class PhysicsGame {
   broadcastGoalReached(playerId) {
     const msg = buildGoalMessage(playerId, this.stage);
     this.broadcastToClients(msg);
+
+    if (this.stage === 4) {
+      const player = Array.from(this.actors.values()).find(a => a.state.player_id === playerId);
+      const totalScore = player ? player.state.score || 0 : 0;
+      setTimeout(() => {
+        const winMsg = buildGameWonMessage(totalScore);
+        this.broadcastToClients(winMsg);
+      }, 1000);
+    } else {
+      setTimeout(() => this.nextStage(), 3000);
+    }
   }
 
   broadcastStateUpdate(version) {
@@ -585,6 +603,10 @@ class PhysicsGame {
           client.ws.send(msgpack.pack(msg));
         }
       });
+    } else if (this.stage === 4) {
+      console.error('[GAME] Stage 4 complete! All stages finished.');
+      this.stage_over = true;
+      this.stage_over_time = this.frame;
     }
   }
 }

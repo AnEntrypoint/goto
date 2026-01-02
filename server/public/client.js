@@ -17,7 +17,8 @@ const MSG_TYPES = {
   SPAWN: 4,
   REMOVE: 5,
   PAUSE: 6,
-  RESUME: 7
+  RESUME: 7,
+  GAME_WON: 8
 };
 
 let unpackr = null;
@@ -113,6 +114,7 @@ class GameClient {
     this.screenFlash = 0;
     this.screenFlashColor = [0, 0, 0];
     this.floatingNumbers = [];
+    this.gameWon = false;
 
     this.connect();
     this.setupInput();
@@ -195,6 +197,8 @@ class GameClient {
           return this.handleSpawn(msg.data);
         case MSG_TYPES.REMOVE:
           return this.handleRemove(msg.data);
+        case MSG_TYPES.GAME_WON:
+          return this.handleGameWon(msg.data);
       }
     } else if (typeof msg.type === 'string') {
       return this.handleMessage(msg);
@@ -283,6 +287,17 @@ class GameClient {
 
   handleRemove(data) {
     this.actors.delete(data.name);
+  }
+
+  handleGameWon(data) {
+    this.goalReached = true;
+    this.gameWon = true;
+    if (this.goal) {
+      particles.emit('confetti', canvas.width / 2, canvas.height / 2);
+      particles.emit('confetti', canvas.width / 2, canvas.height / 2);
+      particles.emit('confetti', canvas.width / 2, canvas.height / 2);
+    }
+    sound.playGoal();
   }
 
   handleMessage(msg) {
@@ -662,6 +677,26 @@ class GameClient {
         ctx.fillStyle = '#FFD700';
         ctx.fillText('GAME COMPLETE!', canvas.width / 2, canvas.height / 2 + 90);
       }
+    }
+
+    if (this.gameWon) {
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.95)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = '#00FF00';
+      ctx.font = 'bold 72px Arial';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('YOU WIN!', canvas.width / 2, canvas.height / 2 - 100);
+
+      ctx.font = '28px Arial';
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillText(`Final Score: ${player?.state.score || 0}`, canvas.width / 2, canvas.height / 2 + 20);
+      ctx.fillText('All Stages Complete!', canvas.width / 2, canvas.height / 2 + 70);
+
+      ctx.font = '16px Arial';
+      ctx.fillStyle = '#CCCCCC';
+      ctx.fillText('Reload page to play again', canvas.width / 2, canvas.height / 2 + 120);
     }
 
     if (this.paused && !this.goalReached && (!player || player.state.lives > 0)) {
