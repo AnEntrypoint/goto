@@ -612,19 +612,13 @@ class PhysicsGame {
   broadcastToClients(message) {
     let msg;
     try {
-      if (Array.isArray(message)) {
-        msg = msgpack.pack(message);
-      } else if (typeof message === 'string') {
-        msg = message;
-      } else {
-        msg = msgpack.pack(message);
-      }
+      msg = JSON.stringify(message);
     } catch (e) {
-      console.error('Msgpack encode error:', e.message);
+      console.error('JSON encode error:', e.message);
       return;
     }
 
-    const msgSize = typeof msg === 'string' ? msg.length : msg.length;
+    const msgSize = msg.length;
     stats.messagesSent++;
     stats.windowBytes += msgSize;
     stats.windowMessages++;
@@ -657,7 +651,7 @@ class PhysicsGame {
         const actors = Array.from(this.actors.values()).map(a => serializeActorFull(a));
         const msg = buildStageloadMessage(this.stage, this.level.name, this.level.goal, actors);
         try {
-          client.ws.send(msgpack.pack(msg));
+          client.ws.send(JSON.stringify(msg));
         } catch (e) {
           console.error('Stage load error:', e.message);
         }
@@ -705,7 +699,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 wss.on('connection', (ws) => {
   const playerId = nextPlayerId++;
-  const spawnPos = [500 + (playerId - 1) * 50,656];
+  const spawnPos = [500 + (playerId - 1) * 50, 664];
   game.spawn('player', spawnPos, { player_id: playerId });
 
   const client = { ws, playerId };
@@ -713,7 +707,7 @@ wss.on('connection', (ws) => {
 
   const actors = Array.from(game.actors.values()).map(a => serializeActorFull(a));
   const initMsg = buildInitMessage(playerId, game.stage, game.level.name, game.level.goal, game.frame, actors);
-  ws.send(msgpack.pack(initMsg));
+  ws.send(JSON.stringify(initMsg));
 
   ws.on('message', (msg) => {
     try {

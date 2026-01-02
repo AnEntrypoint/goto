@@ -160,7 +160,12 @@ class GameClient {
           }
         } else if (typeof evt.data === 'string') {
           try {
-            msg = JSON.parse(evt.data);
+            const parsed = JSON.parse(evt.data);
+            if (Array.isArray(parsed) && typeof parsed[0] === 'number') {
+              msg = { type: parsed[0], data: parsed[1] };
+            } else {
+              msg = parsed;
+            }
           } catch (jsonError) {
             console.error('JSON parse failed:', jsonError.message);
             throw jsonError;
