@@ -251,7 +251,29 @@ class GameClient {
         }
       }
     }
+
+    if (data.checksum !== undefined) {
+      const localChecksum = this.computeClientChecksum();
+      if (localChecksum !== data.checksum) {
+        console.error(`[DESYNC] Frame ${data.frame}: server=${data.checksum} client=${localChecksum}`);
+      }
+    }
+
     this.updateCamera();
+  }
+
+  computeClientChecksum() {
+    let sum = 0;
+    for (const actor of this.actors.values()) {
+      const x = Math.round(actor.pos[0]);
+      const y = Math.round(actor.pos[1]);
+      const vx = Math.round(actor.vel[0] || 0);
+      const vy = Math.round(actor.vel[1] || 0);
+      const lives = actor.state?.lives || 0;
+      const score = actor.state?.score || 0;
+      sum += (x + y + vx + vy + lives + score);
+    }
+    return sum & 0xFFFFFFFF;
   }
 
   handleGoal(data) {

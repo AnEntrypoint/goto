@@ -54,6 +54,20 @@ function buildGameWonMessage(totalScore) {
   return [MSG_TYPES.GAME_WON, { totalScore }];
 }
 
+function computeStateChecksum(actors) {
+  let sum = 0;
+  for (const [name, actor] of actors) {
+    const x = Math.round(actor.body.position.x);
+    const y = Math.round(actor.body.position.y);
+    const vx = Math.round(actor.body.velocity.x);
+    const vy = Math.round(actor.body.velocity.y);
+    const lives = actor.state.lives || 0;
+    const score = actor.state.score || 0;
+    sum += (x + y + vx + vy + lives + score);
+  }
+  return sum & 0xFFFFFFFF;
+}
+
 function serializeActorState(actor) {
   return {
     n: actor.name,
@@ -527,7 +541,11 @@ class PhysicsGame {
     for (const [name, actor] of this.actors) {
       this.lastActorState.set(name, serializeActorState(actor));
     }
-    const msg = buildUpdateMessage(version, this.frame, this.stage, actors);
+    const data = { version, frame: this.frame, stage: this.stage, actors };
+    if (this.frame % 10 === 0) {
+      data.checksum = computeStateChecksum(this.actors);
+    }
+    const msg = [MSG_TYPES.UPDATE, data];
     this.broadcastToClients(msg);
   }
 
