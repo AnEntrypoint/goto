@@ -312,6 +312,9 @@ class PhysicsGame {
       }
     }
     state.width = width;
+    state._goal_reached = false;
+    state._landed_this_frame = false;
+    state._hit_this_frame = null;
 
     const actor = {
       name: body.label,
@@ -674,9 +677,9 @@ class PhysicsGame {
       .filter(a => a.type === 'player' && a.state.lives > 0 && a.state.respawn_time <= 0);
 
     if (activePlayers.length === 0) {
-      const deadPlayers = Array.from(this.actors.values())
-        .filter(a => a.type === 'player');
-      if (deadPlayers.length > 0 && !this.stage_over) {
+      const connectedPlayers = Array.from(this.actors.values())
+        .filter(a => a.type === 'player' && !a.state.removed && this.clients.has(a.state.player_id));
+      if (connectedPlayers.length > 0 && !this.stage_over) {
         this.stage_over = true;
         this.stage_over_time = this.frame;
         console.error(`[GAMEOVER] All players eliminated at frame ${this.frame}`);
@@ -795,6 +798,10 @@ class PhysicsGame {
       this.pendingInput.delete(playerId);
       this.pausedPlayers.delete(playerId);
       this.inputRateLimit.delete(playerId);
+      const actor = this.playerActors.get(playerId);
+      if (actor) {
+        actor.state.removed = true;
+      }
       this.playerActors.delete(playerId);
     }
   }
@@ -825,6 +832,10 @@ class PhysicsGame {
       this.pendingInput.delete(playerId);
       this.pausedPlayers.delete(playerId);
       this.inputRateLimit.delete(playerId);
+      const actor = this.playerActors.get(playerId);
+      if (actor) {
+        actor.state.removed = true;
+      }
       this.playerActors.delete(playerId);
     }
   }
@@ -907,7 +918,7 @@ wss.on('connection', (ws) => {
         game.pendingInput.set(playerId, { action: 'jump' });
       } else if (action === 'nextstage') {
         const actor = game.playerActors.get(playerId);
-        if (actor && actor.state._goal_reached) {
+        if (actor && actor.state._goal_reached && !game.stage_transitioning) {
           game.nextStage();
         }
       } else if (action === 'pause') {
