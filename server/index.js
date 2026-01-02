@@ -36,8 +36,8 @@ const PHYSICS = {
 
 const STATE_SCHEMAS = {
   player: {
-    fields: ['player_id', 'on_ground', 'lives', 'deaths', 'respawn_time', 'invulnerable', 'score', 'stage_time', '_coyote_counter'],
-    defaults: { player_id: 0, on_ground: true, lives: 3, deaths: 0, respawn_time: 0, invulnerable: 0, score: 0, stage_time: 0, _coyote_counter: 0 }
+    fields: ['player_id', 'speed', 'on_ground', 'lives', 'deaths', 'respawn_time', 'invulnerable', 'score', 'stage_time', '_coyote_counter'],
+    defaults: { player_id: 0, speed: 200, on_ground: true, lives: 3, deaths: 0, respawn_time: 0, invulnerable: 0, score: 0, stage_time: 0, _coyote_counter: 0 }
   },
   enemy: {
     fields: ['speed', 'patrol_dir', 'on_ground', '_coyote_counter'],
@@ -172,13 +172,14 @@ function serializeActorDelta(actor, lastState) {
   const current = serializeActorState(actor);
   if (!lastState) return current;
 
-  const delta = {};
+  const delta = { n: current.n };
   for (const key in current) {
+    if (key === 'n') continue;
     if (JSON.stringify(current[key]) !== JSON.stringify(lastState[key])) {
       delta[key] = current[key];
     }
   }
-  return Object.keys(delta).length > 0 ? delta : null;
+  return Object.keys(delta).length > 1 ? delta : null;
 }
 
 class PhysicsGame {
@@ -310,12 +311,6 @@ class PhysicsGame {
         console.warn(`[SPAWN] Rejected invalid field "${field}" for type "${type}"`);
       }
     }
-    if (type === 'enemy' && !extra.speed) {
-      state.speed = PHYSICS.ENEMY_SPEED;
-    }
-    if (type === 'player' && !extra.speed) {
-      state.speed = PHYSICS.PLAYER_SPEED;
-    }
     state.width = width;
 
     const actor = {
@@ -372,13 +367,13 @@ class PhysicsGame {
         if (dir === 0) {
           this.heldInput.delete(playerId);
           const actor = this.playerActors.get(playerId);
-          if (actor) actor.body.velocity.x = 0;
+          if (actor && !actor.state.removed) actor.body.velocity.x = 0;
         } else {
           this.heldInput.set(playerId, { action: 'move', direction: dir });
         }
       } else if (input.action === 'jump') {
         const actor = this.playerActors.get(playerId);
-        if (actor && (actor.state.on_ground || actor.state._coyote_counter < 6)) {
+        if (actor && !actor.state.removed && (actor.state.on_ground || actor.state._coyote_counter < 6)) {
           actor.body.velocity.y = PHYSICS.JUMP_VELOCITY;
           actor.state._coyote_counter = 6;
           actor.state._jump_frame = this.frame;
@@ -389,7 +384,7 @@ class PhysicsGame {
 
     for (const [playerId, input] of this.heldInput) {
       const actor = this.playerActors.get(playerId);
-      if (!actor) continue;
+      if (!actor || actor.state.removed) continue;
       if (input.action === 'move') {
         const dir = input.direction || 0;
         if (typeof dir === 'number') {
@@ -424,7 +419,7 @@ class PhysicsGame {
       const onPlatform = Array.from(this.actors.values()).some(a =>
         (a.type === 'platform' || a.type === 'breakable_platform') &&
         Math.abs(a.body.position.x - pos[0]) < 40 &&
-        Math.abs(a.body.position.y - pos[1] + 24) < 16
+        Math.abs(a.body.position.y - (pos[1] + 24)) < 12
       );
 
       return onPlatform;
@@ -492,10 +487,12 @@ class PhysicsGame {
       }
 
       if (actor.type === 'player' || actor.type === 'enemy') {
-        actor.body.velocity.y = Math.min(
-          actor.body.velocity.y + PHYSICS.GRAVITY * (TICK_MS / 1000),
-          PHYSICS.MAX_FALL_SPEED
-        );
+        if (!actor.state.on_ground) {
+          actor.body.velocity.y = Math.min(
+            actor.body.velocity.y + PHYSICS.GRAVITY * (TICK_MS / 1000),
+            PHYSICS.MAX_FALL_SPEED
+          );
+        }
         if (actor.state._coyote_counter < 6) {
           actor.state._coyote_counter++;
         }
@@ -1158,9 +1155,9 @@ setInterval(() => {
 }, TICK_MS);
 
 app.get('/api/perf', (req, res) => {
-  const avgTime = frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length;
-  const maxTime = Math.max(...frameTimes);
-  const minTime = Math.min(...frameTimes);
+  const avgTime = frameTimes.length > 0 ? frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length : 0;
+  const maxTime = frameTimes.length > 0 ? Math.max(...frameTimes) : 0;
+  const minTime = frameTimes.length > 0 ? Math.min(...frameTimes) : 0;
   res.json({
     frame: game.frame,
     fps: 1000 / TICK_MS,
