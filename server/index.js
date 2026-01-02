@@ -566,7 +566,7 @@ class PhysicsGame {
             const playerRight = movingBody.position.x + playerHW;
             const xOverlap = playerRight >= platformLeft && playerLeft <= platformRight;
             const landingFromAbove = xOverlap && movingBody.velocity.y > 0 && prevPlayerBottom < platformTop && playerBottom >= platformTop;
-            const restingOnPlatform = xOverlap && playerBottom > platformTop - 2 && playerBottom < platformBot + 2;
+            const restingOnPlatform = xOverlap && playerBottom >= platformTop && playerBottom <= platformTop + 4;
 
             if (landingFromAbove || restingOnPlatform) {
               movingBody.velocity.y = 0;
