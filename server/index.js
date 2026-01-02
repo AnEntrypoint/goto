@@ -240,11 +240,19 @@ class PhysicsGame {
 
     if (this.level.platforms) {
       for (const p of this.level.platforms) {
+        if (typeof p.x !== 'number' || typeof p.y !== 'number') {
+          console.warn(`[LOAD] Skipping platform with invalid position: ${JSON.stringify(p)}`);
+          continue;
+        }
         this.spawn(p.breakable ? 'breakable_platform' : 'platform', [p.x, p.y], { max_hits: p.max_hits || 3, width: p.width || 32 });
       }
     }
     if (this.level.enemies) {
       for (const e of this.level.enemies) {
+        if (typeof e.x !== 'number' || typeof e.y !== 'number') {
+          console.warn(`[LOAD] Skipping enemy with invalid position: ${JSON.stringify(e)}`);
+          continue;
+        }
         this.spawn('enemy', [e.x, e.y], { speed: e.speed || 100, patrol_dir: e.dir || -1 });
       }
     }
