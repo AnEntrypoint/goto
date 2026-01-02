@@ -47,6 +47,8 @@ class PhysicsGame {
     this.contacts.clear();
     this.nextNetId = 1;
     this.frame = 0;
+    this.stage_over = false;
+    this.stage_over_time = 0;
 
     const levelPath = `levels/stage${stageNum}.json`;
     try {
@@ -316,16 +318,20 @@ class PhysicsGame {
               actorA.state._landed_this_frame = true;
               actorA.state._coyote_counter = 0;
 
-              if (actorB.type === 'breakable_platform' && !actorB.state._broken_by) {
-                actorB.state._broken_by = nameA;
-                actorB.state.hit_count++;
-                if (actorA.type === 'player') {
-                  actorA.state.score += 10;
-                  console.error(`[SCORE] Player ${actorA.state.player_id} scored +10 (total: ${actorA.state.score}) for landing on breakable platform`);
+              if (actorB.type === 'breakable_platform') {
+                const alreadyHit = actorB.state._broken_by === nameA;
+                if (!alreadyHit) {
+                  actorB.state._broken_by = nameA;
+                  actorB.state.hit_count++;
+                  if (actorA.type === 'player') {
+                    actorA.state.score += 10;
+                    console.error(`[SCORE] Player ${actorA.state.player_id} scored +10 (total: ${actorA.state.score}) for damaging platform ${actorB.name}`);
+                  }
                 }
-                if (actorB.state.hit_count >= actorB.state.max_hits) {
+                if (actorB.state.hit_count >= actorB.state.max_hits && !actorB.state._confirmed_broken) {
+                  actorB.state._confirmed_broken = true;
                   actorB.state.removed = true;
-                  console.error(`[BREAK] Platform ${actorB.name} broke (hit_count: ${actorB.state.hit_count}/${actorB.state.max_hits})`);
+                  console.error(`[BREAK] Platform ${actorB.name} broke (${actorB.state.hit_count}/${actorB.state.max_hits} hits)`);
                 }
               }
             }
@@ -350,9 +356,10 @@ class PhysicsGame {
   checkGoal() {
     if (!this.level.goal) return;
     for (const [_, actor] of this.actors) {
-      if (actor.type === 'player') {
+      if (actor.type === 'player' && !actor.state._goal_reached) {
         const dist = Math.hypot(actor.body.position.x - this.level.goal.x, actor.body.position.y - this.level.goal.y);
         if (dist < 40) {
+          actor.state._goal_reached = true;
           this.broadcastGoalReached(actor.state.player_id);
         }
       }
@@ -458,6 +465,8 @@ class PhysicsGame {
 
   nextStage() {
     if (this.stage < 4) {
+      this.pausedPlayers.clear();
+      this.paused = false;
       this.loadStage(this.stage + 1);
       this.clients.forEach((client) => {
         const spawnPos = [500 + (client.playerId - 1) * 50, 664];

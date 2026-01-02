@@ -215,7 +215,10 @@ class GameClient {
         this.levelName = msg.levelName;
         this.goal = msg.goal;
         this.actors.clear();
+        this.lastActorState.clear();
+        this.floatingNumbers = [];
         this.goalReached = false;
+        this.paused = false;
         for (const actor of msg.actors) {
           this.spawnActor(actor);
         }
@@ -343,6 +346,7 @@ class GameClient {
   }
 
   updateMovement() {
+    if (this.paused) return;
     let direction = 0;
     if (this.keysHeld.right) direction = 1;
     if (this.keysHeld.left) direction = -1;
@@ -425,6 +429,15 @@ class GameClient {
     const w = actor.state.width || 32;
     const h = (actor.type === 'platform' || actor.type === 'breakable_platform') ? 16 : 32;
 
+    ctx.save();
+
+    if (actor.type === 'player' && (actor.state.invulnerable || 0) > 0) {
+      const blink = Math.floor((actor.state.invulnerable || 0) * 20) % 2;
+      if (blink === 0) {
+        ctx.globalAlpha = 0.5;
+      }
+    }
+
     switch (actor.type) {
       case 'player':
         sprites.drawPlayer(ctx, x, y, actor.state, this.frame);
@@ -438,6 +451,8 @@ class GameClient {
         sprites.drawPlatform(ctx, x, y, w, h, isDamaged);
         break;
     }
+
+    ctx.restore();
   }
 
   getLocalPlayer() {
