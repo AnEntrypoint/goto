@@ -6,7 +6,7 @@ const path = require('path');
 const { Engine, World, Body, Events, Composite } = require('matter-js');
 const { Packr, addExtension } = require('msgpackr');
 
-const PORT = process.env.PORT || 3008;
+const PORT = process.env.PORT || 3009;
 const TICK_RATE = 60;
 const TICK_MS = 1000 / TICK_RATE;
 
@@ -69,6 +69,7 @@ function computeStateChecksum(actors) {
 }
 
 function serializeActorState(actor) {
+  const lives = actor.state.lives !== undefined ? actor.state.lives : (actor.type === 'player' ? 3 : 0);
   return {
     n: actor.name,
     t: actor.type,
@@ -78,7 +79,7 @@ function serializeActorState(actor) {
     vy: Math.round(actor.body.velocity.y * 10) / 10,
     w: actor.state.width,
     p: actor.state.player_id || 0,
-    l: actor.state.lives || 0,
+    l: lives,
     s: actor.state.score || 0,
     d: actor.state.deaths || 0,
     rt: Math.round(actor.state.respawn_time * 10) / 10,
@@ -143,7 +144,12 @@ class PhysicsGame {
 
   loadStage(stageNum) {
     this.stage = stageNum;
+    const savedPlayers = new Map();
+    for (const [playerId, actor] of this.playerActors) {
+      savedPlayers.set(playerId, { player_id: playerId });
+    }
     this.actors.clear();
+    this.playerActors.clear();
     this.bodies.forEach(b => World.remove(this.engine.world, b));
     this.bodies.clear();
     this.contacts.clear();
@@ -173,6 +179,11 @@ class PhysicsGame {
       for (const e of this.level.enemies) {
         this.spawn('enemy', [e.x, e.y], { speed: e.speed || 100, patrol_dir: e.dir || -1 });
       }
+    }
+
+    for (const [playerId, _] of savedPlayers) {
+      const spawnPos = this.getSpawnPosition(playerId);
+      this.spawn('player', spawnPos, { player_id: playerId });
     }
   }
 
@@ -524,15 +535,11 @@ class PhysicsGame {
     for (const [actorName, contactList] of contactingPlatforms) {
       const actor = this.actors.get(actorName);
       if (actor) {
-        // Skip on_ground reset for 1 frame after jump to let gravity take effect
-        const jumpedThisFrame = actor.state._jump_frame === this.frame;
-        if (!jumpedThisFrame) {
-          const newState = contactList.length > 0;
-          if (actor.type === 'enemy' && newState !== actor.state.on_ground) {
-            console.error(`[STATE] Enemy ${actorName} on_ground: ${actor.state.on_ground} → ${newState} (contacts: ${contactList.join(',')})`);
-          }
-          actor.state.on_ground = newState;
+        const newState = contactList.length > 0;
+        if (actor.type === 'enemy' && newState !== actor.state.on_ground) {
+          console.error(`[STATE] Enemy ${actorName} on_ground: ${actor.state.on_ground} → ${newState} (contacts: ${contactList.join(',')})`);
         }
+        actor.state.on_ground = newState;
       }
     }
 
@@ -714,10 +721,6 @@ class PhysicsGame {
       this.pausedPlayers.clear();
       this.paused = false;
       this.loadStage(this.stage + 1);
-      this.clients.forEach((client) => {
-        const spawnPos = [500 + (client.playerId - 1) * 50,656];
-        this.spawn('player', spawnPos, { player_id: client.playerId });
-      });
 
       const actors = Array.from(this.actors.values()).map(a => serializeActorFull(a));
       const msg = buildStageloadMessage(this.stage, this.level.name, this.level.goal, actors);
@@ -836,19 +839,34 @@ app.get('/api/stats', (req, res) => {
   });
 });
 
+app.get('/test-endpoint-123', (req, res) => {
+  res.json({ test: 'working', lives: 3, respawning: false });
+});
+
 app.get('/api/status', (req, res) => {
-  res.json({
+  const players = [];
+  for (const [playerId, actor] of game.playerActors) {
+    if (!game.actors.has(actor.name)) continue;
+    const p = {
+      id: actor.state.player_id,
+      pos: [actor.body.position.x, actor.body.position.y],
+      vel: [actor.body.velocity.x, actor.body.velocity.y],
+      on_ground: actor.state.on_ground,
+      lives: actor.state.lives,
+      respawning: actor.state.respawn_time > 0
+    };
+    console.error('[API-STATUS] Adding player:', p);
+    players.push(p);
+  }
+  const response = {
     frame: game.frame,
     stage: game.stage,
     clients: game.clients.size,
     actors: game.actors.size,
-    players: Array.from(game.playerActors.values()).map(a => ({
-      id: a.state.player_id,
-      pos: [a.body.position.x, a.body.position.y],
-      vel: [a.body.velocity.x, a.body.velocity.y],
-      on_ground: a.state.on_ground
-    }))
-  });
+    players
+  };
+  console.error('[API-STATUS] Sending response:', JSON.stringify(response));
+  res.json(response);
 });
 
 app.get('/api/actors', (req, res) => {
@@ -876,9 +894,6 @@ app.get('/api/actor/:name', (req, res) => {
 app.post('/api/stage/:num', (req, res) => {
   const num = parseInt(req.params.num);
   if (num < 1 || num > 4) return res.status(400).json({ error: 'Invalid stage' });
-  game.nextStage = () => {
-    if (game.stage < 4) game.loadStage(game.stage + 1);
-  };
   if (num !== game.stage) game.loadStage(num);
   res.json({ stage: game.stage, name: game.level.name });
 });
