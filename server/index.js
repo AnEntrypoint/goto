@@ -73,6 +73,14 @@ function buildGameWonMessage(totalScore) {
   return [MSG_TYPES.GAME_WON, { totalScore }];
 }
 
+function buildPauseMessage() {
+  return [MSG_TYPES.PAUSE, {}];
+}
+
+function buildResumeMessage() {
+  return [MSG_TYPES.RESUME, {}];
+}
+
 function computeStateChecksum(actors) {
   let sum = 0;
   for (const [name, actor] of actors) {
@@ -388,6 +396,31 @@ class PhysicsGame {
     const baseY = 656;
     const searchRadius = 100;
 
+    const isValidSpawn = (pos) => {
+      const playerRadius = 16;
+
+      for (const actor of this.actors.values()) {
+        const dx = Math.abs(actor.body.position.x - pos[0]);
+        const dy = Math.abs(actor.body.position.y - pos[1]);
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        if (actor.type === 'player' && actor.state.player_id !== playerId && dist < 60) {
+          return false;
+        }
+        if (actor.type === 'enemy' && dist < 60) {
+          return false;
+        }
+      }
+
+      const onPlatform = Array.from(this.actors.values()).some(a =>
+        (a.type === 'platform' || a.type === 'breakable_platform') &&
+        Math.abs(a.body.position.x - pos[0]) < 40 &&
+        Math.abs(a.body.position.y - pos[1] + 24) < 16
+      );
+
+      return onPlatform;
+    };
+
     for (let radius = 0; radius < searchRadius; radius += 20) {
       const candidates = [
         [baseX + radius, baseY],
@@ -397,13 +430,7 @@ class PhysicsGame {
       ];
 
       for (const pos of candidates) {
-        const occupied = Array.from(this.actors.values()).some(a =>
-          a.type === 'player' &&
-          a.state.player_id !== playerId &&
-          Math.abs(a.body.position.x - pos[0]) < 40 &&
-          Math.abs(a.body.position.y - pos[1]) < 40
-        );
-        if (!occupied) {
+        if (isValidSpawn(pos)) {
           return pos;
         }
       }
@@ -865,11 +892,13 @@ wss.on('connection', (ws) => {
         game.pausedPlayers.add(playerId);
         if (game.pausedPlayers.size === game.clients.size) {
           game.paused = true;
+          game.broadcastToClients(buildPauseMessage());
         }
       } else if (action === 'resume') {
         game.pausedPlayers.delete(playerId);
         if (game.pausedPlayers.size < game.clients.size) {
           game.paused = false;
+          game.broadcastToClients(buildResumeMessage());
         }
       }
     } catch (e) {
@@ -1062,6 +1091,15 @@ setInterval(() => {
   const tickStart = Date.now();
   try {
     game.tick();
+  } catch (e) {
+    console.error(`[TICK_CRASH] Frame ${game.frame}: ${e.message}`);
+    console.error(e.stack);
+    game.paused = true;
+    game.broadcastToClients([MSG_TYPES.UPDATE, { error: 'Game tick error' }]);
+    return;
+  }
+
+  try {
     updateVersion++;
     game.broadcastStateUpdate(updateVersion);
     tickCount++;
@@ -1080,7 +1118,8 @@ setInterval(() => {
       console.error(`[PERF] Frame ${game.frame} | ${health} Avg: ${avgTime.toFixed(1)}ms Max: ${maxTime}ms FPS: ${fps} | Clients: ${game.clients.size} Actors: ${game.actors.size}`);
     }
   } catch (e) {
-    console.error('Game tick error:', e.message, e.stack);
+    console.error(`[BROADCAST_CRASH] Frame ${game.frame}: ${e.message}`);
+    console.error(e.stack);
   }
 }, TICK_MS);
 

@@ -219,6 +219,10 @@ class GameClient {
           return this.handleSpawn(msg.data);
         case MSG_TYPES.REMOVE:
           return this.handleRemove(msg.data);
+        case MSG_TYPES.PAUSE:
+          return this.handlePause(msg.data);
+        case MSG_TYPES.RESUME:
+          return this.handleResume(msg.data);
         case MSG_TYPES.GAME_WON:
           return this.handleGameWon(msg.data);
       }
@@ -339,6 +343,14 @@ class GameClient {
 
   handleRemove(data) {
     this.actors.delete(data.name);
+  }
+
+  handlePause() {
+    this.paused = true;
+  }
+
+  handleResume() {
+    this.paused = false;
   }
 
   handleGameWon(data) {
