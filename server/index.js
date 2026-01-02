@@ -187,7 +187,6 @@ class PhysicsGame {
     this.level = null;
     this.pendingInput = new Map();
     this.heldInput = new Map();
-    this.contacts = new Map();
     this.paused = false;
     this.pausedPlayers = new Set();
     this.lastActorState = new Map();
@@ -210,7 +209,6 @@ class PhysicsGame {
     this.playerActors.clear();
     this.bodies.forEach(b => World.remove(this.engine.world, b));
     this.bodies.clear();
-    this.contacts.clear();
     this.pausedPlayers.clear();
     this.nextNetId = 1;
     this.frame = 0;
@@ -669,6 +667,14 @@ class PhysicsGame {
     }
     for (const [name, actor] of this.actors) {
       this.lastActorState.set(name, serializeActorState(actor));
+    }
+    if (this.lastActorState.size > 1000) {
+      const activeNames = new Set(this.actors.keys());
+      for (const [name] of this.lastActorState) {
+        if (!activeNames.has(name)) {
+          this.lastActorState.delete(name);
+        }
+      }
     }
     const data = { version, frame: this.frame, stage: this.stage, actors };
     if (this.frame % 10 === 0) {
