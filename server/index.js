@@ -258,7 +258,7 @@ class PhysicsGame {
           console.warn(`[LOAD] Skipping enemy with invalid position: ${JSON.stringify(e)}`);
           continue;
         }
-        this.spawn('enemy', [e.x, e.y], { speed: e.speed || 100, patrol_dir: e.dir || -1 });
+        this.spawn('enemy', [e.x, e.y], { speed: e.speed || 120, patrol_dir: e.dir || -1 });
       }
     }
 
@@ -292,8 +292,7 @@ class PhysicsGame {
       friction: isStatic ? 0.5 : 0,
       restitution: 0,
       label: `${type}_${this.nextNetId}`,
-      collisionFilter: { category: type === 'player' ? 1 : 2 },
-      circleRadius: Math.max(width, height) / 2
+      collisionFilter: { category: type === 'player' ? 1 : 2 }
     });
     body._width = width;
     body._height = height;
@@ -481,7 +480,7 @@ class PhysicsGame {
     for (const [name, actor] of this.actors) {
       if (actor.state.removed) continue;
       if (actor.type === 'enemy') {
-        const dir = actor.state.patrol_dir;
+        const dir = actor.state.patrol_dir > 0 ? 1 : -1;
         actor.body.velocity.x = dir * actor.state.speed;
 
         const minBound = 50;
@@ -650,7 +649,7 @@ class PhysicsGame {
   }
 
   checkGoal() {
-    if (!this.level.goal) return;
+    if (!this.level.goal || typeof this.level.goal.x !== 'number' || typeof this.level.goal.y !== 'number') return;
     for (const [_, actor] of this.actors) {
       if (actor.type === 'player' && !actor.state._goal_reached && !actor.state.removed && actor.body) {
         const dist = Math.hypot(actor.body.position.x - this.level.goal.x, actor.body.position.y - this.level.goal.y);
@@ -709,7 +708,7 @@ class PhysicsGame {
     this.broadcastToClients(msg);
 
     if (this.stage === 4) {
-      const player = Array.from(this.actors.values()).find(a => a.state.player_id === playerId);
+      const player = Array.from(this.actors.values()).find(a => !a.state.removed && a.state.player_id === playerId);
       const totalScore = player ? player.state.score || 0 : 0;
       setTimeout(() => {
         const winMsg = buildGameWonMessage(totalScore);
@@ -792,7 +791,7 @@ class PhysicsGame {
             console.error(`Broadcast error for player ${playerId}:`, e.message);
             deadClients.push(playerId);
           }
-        } else if (client.ws.readyState === WebSocket.CLOSED) {
+        } else if (client.ws.readyState !== WebSocket.CONNECTING) {
           deadClients.push(playerId);
         }
       } else {
@@ -828,7 +827,7 @@ class PhysicsGame {
             console.error(`Stage load error for player ${playerId}:`, e.message);
             deadClients.push(playerId);
           }
-        } else if (client.ws.readyState === WebSocket.CLOSED) {
+        } else if (client.ws.readyState !== WebSocket.CONNECTING) {
           deadClients.push(playerId);
         }
       } else {
