@@ -665,17 +665,22 @@ class PhysicsGame {
   }
 
   removeDeadActors() {
+    const toRemove = [];
     for (const [name, actor] of this.actors) {
       if (actor.state.removed) {
-        if (actor.type === 'player') {
-          console.error(`[REMOVE] Removing player ${actor.state.player_id} (${name})`);
-          this.playerActors.delete(actor.state.player_id);
-        }
-        World.remove(this.engine.world, actor.body);
-        this.actors.delete(name);
-        this.bodies.delete(name);
-        this.lastActorState.delete(name);
+        toRemove.push(name);
       }
+    }
+    for (const name of toRemove) {
+      const actor = this.actors.get(name);
+      if (actor.type === 'player') {
+        console.error(`[REMOVE] Removing player ${actor.state.player_id} (${name})`);
+        this.playerActors.delete(actor.state.player_id);
+      }
+      World.remove(this.engine.world, actor.body);
+      this.actors.delete(name);
+      this.bodies.delete(name);
+      this.lastActorState.delete(name);
     }
   }
 
@@ -737,11 +742,15 @@ class PhysicsGame {
       this.lastActorState.set(name, serializeActorState(actor));
     }
     if (this.lastActorState.size > 1000) {
+      const toDelete = [];
       for (const [name] of this.lastActorState) {
         const actor = this.actors.get(name);
         if (!actor || actor.state.removed) {
-          this.lastActorState.delete(name);
+          toDelete.push(name);
         }
+      }
+      for (const name of toDelete) {
+        this.lastActorState.delete(name);
       }
     }
     const data = { version, frame: this.frame, stage: this.stage, actors };
