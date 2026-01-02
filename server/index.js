@@ -513,7 +513,7 @@ class PhysicsGame {
 
       actor.state._landed_this_frame = false;
 
-      if (actor.body.position.y > 750) {
+      if (actor.type === 'player' && actor.body.position.y > 750) {
         actor.state.removed = true;
       }
     }
