@@ -94,6 +94,9 @@ function computeStateChecksum(actors) {
       const lives = actor.state.lives || 0;
       const score = actor.state.score || 0;
       sum += (lives + score);
+    } else if (actor.type === 'breakable_platform') {
+      const hitCount = actor.state.hit_count || 0;
+      sum += hitCount;
     }
   }
   return sum & 0xFFFFFFFF;
@@ -492,7 +495,7 @@ class PhysicsGame {
 
         if ((actor.body.position.x < minBound + turnDistance && dir < 0) ||
             (actor.body.position.x > maxBound - turnDistance && dir > 0)) {
-          actor.state.patrol_dir *= -1;
+          actor.state.patrol_dir = actor.state.patrol_dir > 0 ? -1 : 1;
         }
       }
 
@@ -713,9 +716,9 @@ class PhysicsGame {
     this.broadcastToClients(msg);
 
     if (this.stage === 4) {
-      const player = Array.from(this.actors.values()).find(a => !a.state.removed && a.state.player_id === playerId);
-      const totalScore = player ? player.state.score || 0 : 0;
       setTimeout(() => {
+        const player = Array.from(this.actors.values()).find(a => !a.state.removed && a.state.player_id === playerId);
+        const totalScore = player ? player.state.score || 0 : 0;
         const winMsg = buildGameWonMessage(totalScore);
         this.broadcastToClients(winMsg);
       }, 1000);
@@ -1180,8 +1183,12 @@ app.get('/api/frame/:num', (req, res) => {
         let state = {};
         if (a.type === 'player') {
           state = { lives: a.state.lives, score: a.state.score, respawn_time: a.state.respawn_time, on_ground: a.state.on_ground };
+        } else if (a.type === 'enemy') {
+          state = { on_ground: a.state.on_ground };
         } else if (a.type === 'breakable_platform') {
           state = { hit_count: a.state.hit_count };
+        } else if (a.type === 'platform') {
+          state = { width: a.state.width };
         }
         return { name: a.name, type: a.type, pos: [a.body.position.x, a.body.position.y], vel: [a.body.velocity.x, a.body.velocity.y], state };
       })
