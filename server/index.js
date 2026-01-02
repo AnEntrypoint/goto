@@ -25,11 +25,11 @@ const MSG_TYPES = {
 };
 
 const PHYSICS = {
-  GRAVITY: 1200,
-  JUMP_IMPULSE: -450,
-  PLAYER_SPEED: 300,
+  GRAVITY: 800,
+  JUMP_VELOCITY: -400,
+  PLAYER_SPEED: 250,
   ENEMY_SPEED: 120,
-  MAX_FALL_SPEED: 1200,
+  MAX_FALL_SPEED: 600,
   INVULNERABILITY_TIME: 1.5,
   RESPAWN_TIME: 5
 };
@@ -123,7 +123,7 @@ function serializeActorDelta(actor, lastState) {
 class PhysicsGame {
   constructor() {
     this.engine = Engine.create();
-    this.engine.world.gravity.y = PHYSICS.GRAVITY / 100;
+    this.engine.world.gravity.y = 0;
     this.actors = new Map();
     this.bodies = new Map();
     this.clients = new Map();
@@ -245,7 +245,6 @@ class PhysicsGame {
 
       for (const [name, actor] of this.actors) {
         if (!actor.body) continue;
-        actor.body._prevPos = { x: actor.body.position.x, y: actor.body.position.y };
         actor.body.position.x += actor.body.velocity.x * (TICK_MS / 1000);
         actor.body.position.y += actor.body.velocity.y * (TICK_MS / 1000);
       }
@@ -253,6 +252,12 @@ class PhysicsGame {
       this.checkCollisions();
       this.checkGoal();
       this.updateGameState();
+
+      // Save position AFTER collision check for next frame's swept detection
+      for (const [name, actor] of this.actors) {
+        if (!actor.body) continue;
+        actor.body._prevPos = { x: actor.body.position.x, y: actor.body.position.y };
+      }
     }
 
     this.removeDeadActors();
@@ -270,7 +275,7 @@ class PhysicsGame {
       } else if (input.action === 'jump') {
         const actor = this.playerActors.get(playerId);
         if (actor && (actor.state.on_ground || actor.state._coyote_counter < 6)) {
-          actor.body.velocity.y = PHYSICS.JUMP_IMPULSE / 100;
+          actor.body.velocity.y = PHYSICS.JUMP_VELOCITY;
           actor.state._coyote_counter = 6;
         }
       }
@@ -423,14 +428,18 @@ class PhysicsGame {
 
           if ((actorA.type === 'player' || actorA.type === 'enemy') && (actorB.type === 'platform' || actorB.type === 'breakable_platform')) {
             const prevY = bodyA._prevPos?.y || bodyA.position.y;
-            const landingFromAbove = bodyA.velocity.y > 0 && prevY + 16 <= bodyB.position.y + 8 && bodyA.position.y + 16 >= bodyB.position.y - 8;
+            // Landing: moving down, was above platform top, now crossing platform top
+            const platformTop = bodyB.position.y - (bodyB._height || 16) / 2;
+            const playerBottom = bodyA.position.y + (bodyA._height || 32) / 2;
+            const prevPlayerBottom = prevY + (bodyA._height || 32) / 2;
+            const landingFromAbove = bodyA.velocity.y > 0 && prevPlayerBottom <= platformTop && playerBottom >= platformTop;
 
             if (landingFromAbove) {
               if (actorA.type === 'player') {
                 console.error(`[LAND] Player landed on ${actorB.name} at Y ${bodyA.position.y.toFixed(1)}`);
               }
               bodyA.velocity.y = 0;
-              bodyA.position.y = bodyB.position.y - 24;
+              bodyA.position.y = bodyB.position.y - (bodyA._height || 32) / 2 - (bodyB._height || 16) / 2;
               actorA.state.on_ground = true;
               actorA.state._landed_this_frame = true;
               actorA.state._coyote_counter = 0;
