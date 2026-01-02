@@ -326,6 +326,13 @@ class GameClient {
       if (e.key === 'Escape') {
         e.preventDefault();
         this.paused = !this.paused;
+        if (this.paused) {
+          this.keysHeld.left = false;
+          this.keysHeld.right = false;
+          this.sendInput('pause');
+        } else {
+          this.sendInput('resume');
+        }
       }
       if (e.key === 'r' || e.key === 'R') {
         if (this.goalReached) {
