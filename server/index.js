@@ -521,6 +521,22 @@ class PhysicsGame {
       msg = msgpack.pack(message);
     }
 
+    const msgSize = typeof msg === 'string' ? msg.length : msg.length;
+    stats.messagesSent++;
+    stats.windowBytes += msgSize * this.clients.size;
+    stats.windowMessages += this.clients.size;
+
+    const now = Date.now();
+    const windowDuration = (now - stats.windowStartTime) / 1000;
+    if (windowDuration >= 1) {
+      stats.bytesPerSecond = Math.round(stats.windowBytes / windowDuration);
+      stats.messagesSentPerSecond = Math.round(stats.windowMessages / windowDuration);
+      stats.peakBytesPerSecond = Math.max(stats.peakBytesPerSecond, stats.bytesPerSecond);
+      stats.windowBytes = 0;
+      stats.windowMessages = 0;
+      stats.windowStartTime = now;
+    }
+
     this.clients.forEach((client) => {
       if (client && client.ws && client.ws.readyState === WebSocket.OPEN) {
         try {
@@ -559,6 +575,16 @@ const wss = new WebSocket.Server({ server });
 const game = new PhysicsGame();
 let nextPlayerId = 1;
 let updateVersion = 0;
+const stats = {
+  messagesSent: 0,
+  bytesPerSecond: 0,
+  messagesSentPerSecond: 0,
+  peakBytesPerSecond: 0,
+  initTime: Date.now(),
+  windowBytes: 0,
+  windowMessages: 0,
+  windowStartTime: Date.now()
+};
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -618,6 +644,19 @@ wss.on('connection', (ws) => {
 
   ws.on('error', (err) => {
     console.error('WebSocket error:', err.message);
+  });
+});
+
+app.get('/api/stats', (req, res) => {
+  const uptime = Math.round((Date.now() - stats.initTime) / 1000);
+  res.json({
+    uptime,
+    messagesSent: stats.messagesSent,
+    bytesPerSecond: stats.bytesPerSecond,
+    messagesSentPerSecond: stats.messagesSentPerSecond,
+    peakBytesPerSecond: stats.peakBytesPerSecond,
+    avgBytesPerMessage: stats.messagesSent > 0 ? Math.round((stats.windowBytes) / stats.windowMessages) : 0,
+    encoding: 'msgpack'
   });
 });
 
