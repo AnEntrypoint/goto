@@ -4,13 +4,10 @@ const WebSocket = require('ws');
 const fs = require('fs');
 const path = require('path');
 const { Engine, World, Body, Events, Composite } = require('matter-js');
-const { Packr, addExtension } = require('msgpackr');
 
-const PORT = process.env.PORT || 3009;
+const PORT = process.env.PORT || 3008;
 const TICK_RATE = 60;
 const TICK_MS = 1000 / TICK_RATE;
-
-const msgpack = new Packr({ useRecords: false, maxDepth: 10 });
 
 const MSG_TYPES = {
   INIT: 0,
@@ -229,7 +226,6 @@ class PhysicsGame {
     this.bodies.clear();
     this.lastActorState.clear();
     this.pausedPlayers.clear();
-    this.nextNetId = 1;
     this.frame = 0;
     this.stage_over = false;
     this.stage_over_time = 0;
@@ -505,9 +501,9 @@ class PhysicsGame {
             actor.body.velocity.y + PHYSICS.GRAVITY * (TICK_MS / 1000),
             PHYSICS.MAX_FALL_SPEED
           );
-        }
-        if (actor.state._coyote_counter < 6) {
-          actor.state._coyote_counter++;
+          if (actor.state._coyote_counter < 6) {
+            actor.state._coyote_counter++;
+          }
         }
       }
 
@@ -549,13 +545,19 @@ class PhysicsGame {
         const aabbHits = this.checkAABB(bodyA, bodyB);
 
         if (aabbHits) {
-          if (actorB.type === 'enemy' && actorA.type === 'player') {
-            if (actorA.state.invulnerable <= 0) {
-              actorA.state.deaths++;
-              actorA.state.lives = Math.max(0, actorA.state.lives - 1);
-              actorA.state.respawn_time = PHYSICS.RESPAWN_TIME;
-              actorA.state.invulnerable = PHYSICS.INVULNERABILITY_TIME;
-            }
+          let player = null, enemy = null;
+          if (actorA.type === 'player' && actorB.type === 'enemy') {
+            player = actorA;
+            enemy = actorB;
+          } else if (actorB.type === 'player' && actorA.type === 'enemy') {
+            player = actorB;
+            enemy = actorA;
+          }
+          if (player && enemy && player.state.invulnerable <= 0) {
+            player.state.deaths++;
+            player.state.lives = Math.max(0, player.state.lives - 1);
+            player.state.respawn_time = PHYSICS.RESPAWN_TIME;
+            player.state.invulnerable = PHYSICS.INVULNERABILITY_TIME;
           }
 
           let movingActor, platformActor, movingBody, platformBody;
@@ -641,14 +643,15 @@ class PhysicsGame {
     const bHalfW = (bodyB._width || 32) / 2;
     const bHalfH = (bodyB._height || 32) / 2;
     const prevPosA = bodyA._prevPos || bodyA.position;
+    const prevPosB = bodyB._prevPos || bodyB.position;
     const aTop = Math.min(prevPosA.y, bodyA.position.y) - aHalfH;
     const aBot = Math.max(prevPosA.y, bodyA.position.y) + aHalfH;
     const aLeft = Math.min(prevPosA.x, bodyA.position.x) - aHalfW;
     const aRight = Math.max(prevPosA.x, bodyA.position.x) + aHalfW;
-    const bTop = bodyB.position.y - bHalfH;
-    const bBot = bodyB.position.y + bHalfH;
-    const bLeft = bodyB.position.x - bHalfW;
-    const bRight = bodyB.position.x + bHalfW;
+    const bTop = Math.min(prevPosB.y, bodyB.position.y) - bHalfH;
+    const bBot = Math.max(prevPosB.y, bodyB.position.y) + bHalfH;
+    const bLeft = Math.min(prevPosB.x, bodyB.position.x) - bHalfW;
+    const bRight = Math.max(prevPosB.x, bodyB.position.x) + bHalfW;
     const xOverlap = aRight >= bLeft && aLeft <= bRight;
     const yOverlap = aBot >= bTop && aTop <= bBot;
     return xOverlap && yOverlap;
