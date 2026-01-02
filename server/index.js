@@ -239,6 +239,7 @@ class PhysicsGame {
       const data = fs.readFileSync(filePath, 'utf8');
       this.level = JSON.parse(data);
       if (!this.level || typeof this.level !== 'object') throw new Error('Invalid level format');
+      if (typeof this.level.name !== 'string') this.level.name = `Stage ${stageNum}`;
     } catch (e) {
       console.error(`Failed to load stage ${stageNum}:`, e.message);
       this.level = { name: 'Error', platforms: [], enemies: [], goal: null };
@@ -582,7 +583,7 @@ class PhysicsGame {
             const playerRight = movingBody.position.x + playerHW;
             const xOverlap = playerRight >= platformLeft && playerLeft <= platformRight;
             const landingFromAbove = xOverlap && movingBody.velocity.y > 0 && prevPlayerBottom < platformTop && playerBottom >= platformTop;
-            const restingOnPlatform = xOverlap && playerBottom >= platformTop && playerBottom <= platformTop;
+            const restingOnPlatform = xOverlap && playerBottom >= platformTop && playerBottom <= platformBot;
 
             if (landingFromAbove || restingOnPlatform) {
               movingBody.velocity.y = 0;
