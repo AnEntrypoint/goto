@@ -115,6 +115,8 @@ class GameClient {
     this.screenFlashColor = [0, 0, 0];
     this.floatingNumbers = [];
     this.gameWon = false;
+    this.predictedPos = null;
+    this.lastServerX = null;
 
     this.connect();
     this.setupInput();
@@ -249,6 +251,12 @@ class GameClient {
           if (delta.vx !== undefined) actor.vel[0] = delta.vx;
           if (delta.vy !== undefined) actor.vel[1] = delta.vy;
 
+          // Reconcile prediction with server update
+          if (actor.state?.player_id === this.playerId && actor.type === 'player' && delta.x !== undefined) {
+            this.lastServerX = delta.x;
+            this.predictedPos = [delta.x, this.predictedPos ? this.predictedPos[1] : delta.y];
+          }
+
           const newState = {};
           if (delta.w !== undefined) newState.width = delta.w;
           if (delta.p !== undefined) newState.player_id = delta.p;
@@ -313,6 +321,8 @@ class GameClient {
     this.floatingNumbers = [];
     this.goalReached = false;
     this.paused = false;
+    this.predictedPos = null;
+    this.lastServerX = null;
     for (const actor of data.actors) {
       this.spawnActor(actor);
     }
@@ -534,6 +544,21 @@ class GameClient {
     if (this.keysHeld.right) direction = 1;
     if (this.keysHeld.left) direction = -1;
     this.sendInput('move', direction);
+    this.applyMovementPrediction(direction);
+  }
+
+  applyMovementPrediction(direction) {
+    const player = this.getLocalPlayer();
+    if (!player) return;
+
+    if (!this.predictedPos) {
+      this.predictedPos = [player.pos[0], player.pos[1]];
+      this.lastServerX = player.pos[0];
+    }
+
+    const speed = 200;
+    const deltaX = direction * speed * (1/60);
+    this.predictedPos[0] += deltaX;
   }
 
   sendInput(action, direction = 0.0) {
@@ -604,7 +629,10 @@ class GameClient {
     let [x, y] = actor.pos;
     const vel = actor.vel || [0, 0];
 
-    if (actor.type === 'player' || actor.type === 'enemy') {
+    // Use predicted position for local player
+    if (actor.state?.player_id === this.playerId && actor.type === 'player' && this.predictedPos) {
+      x = this.predictedPos[0];
+    } else if (actor.type === 'player' || actor.type === 'enemy') {
       x += vel[0] * (1 / 60);
       y += vel[1] * (1 / 60);
     }
