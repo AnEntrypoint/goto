@@ -347,12 +347,12 @@ class PhysicsGame {
 
       // Save position BEFORE movement for swept collision detection
       for (const [name, actor] of this.actors) {
-        if (!actor.body) continue;
+        if (!actor.body || actor.state.removed) continue;
         actor.body._prevPos = { x: actor.body.position.x, y: actor.body.position.y };
       }
 
       for (const [name, actor] of this.actors) {
-        if (!actor.body) continue;
+        if (!actor.body || actor.state.removed) continue;
         actor.body.position.x += actor.body.velocity.x * (TICK_MS / 1000);
         actor.body.position.y += actor.body.velocity.y * (TICK_MS / 1000);
       }
@@ -451,7 +451,7 @@ class PhysicsGame {
 
   updateRespawns() {
     for (const [name, actor] of this.actors) {
-      if (actor.type !== 'player') continue;
+      if (actor.type !== 'player' || actor.state.removed) continue;
 
       if (actor.state.respawn_time > 0) {
         actor.state.respawn_time -= TICK_MS / 1000;
@@ -651,7 +651,7 @@ class PhysicsGame {
   checkGoal() {
     if (!this.level.goal || typeof this.level.goal.x !== 'number' || typeof this.level.goal.y !== 'number') return;
     for (const [_, actor] of this.actors) {
-      if (actor.type === 'player' && !actor.state._goal_reached && !actor.state.removed && actor.body) {
+      if (actor.type === 'player' && !actor.state._goal_reached && !actor.state.removed && actor.body && actor.state.respawn_time <= 0) {
         const dist = Math.hypot(actor.body.position.x - this.level.goal.x, actor.body.position.y - this.level.goal.y);
         if (dist < 40) {
           actor.state._goal_reached = true;
@@ -1058,7 +1058,7 @@ app.post('/api/stage/:num', (req, res) => {
 
 app.post('/api/spawn/:type', (req, res) => {
   const { x = 640, y = 360, ...extra } = req.body || {};
-  if (req.params.type === 'player' && !extra.player_id) {
+  if (req.params.type === 'player' && (extra.player_id === undefined || extra.player_id === null)) {
     const maxId = Array.from(game.playerActors.keys()).reduce((max, id) => Math.max(max, id), 0);
     extra.player_id = maxId + 1;
   }
