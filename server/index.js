@@ -857,6 +857,9 @@ app.post('/api/stage/:num', (req, res) => {
 
 app.post('/api/spawn/:type', (req, res) => {
   const { x = 640, y = 360, ...extra } = req.body || {};
+  if (req.params.type === 'player' && !extra.player_id) {
+    extra.player_id = Math.max(...Array.from(game.playerActors.keys()), 0) + 1;
+  }
   game.spawn(req.params.type, [x, y], extra);
   res.json({ ok: true });
 });
