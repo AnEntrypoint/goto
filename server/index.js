@@ -467,11 +467,10 @@ class PhysicsGame {
             const prevY = movingBody._prevPos?.y || movingBody.position.y;
             const platformTop = platformBody.position.y - (platformBody._height || 16) / 2;
             const platformBot = platformBody.position.y + (platformBody._height || 16) / 2;
-            const playerTop = movingBody.position.y - (movingBody._height || 32) / 2;
-            const playerBottom = movingBody.position.y + (movingBody._height || 32) / 2;
-            const prevPlayerTop = prevY - (movingBody._height || 32) / 2;
-            const prevPlayerBottom = prevY + (movingBody._height || 32) / 2;
-            const landingFromAbove = movingBody.velocity.y > 0 && prevPlayerBottom <= platformTop && playerBottom >= platformTop;
+            const playerHH = (movingBody._height || 32) / 2;
+            const prevPlayerBottom = prevY + playerHH;
+            const playerBottom = movingBody.position.y + playerHH;
+            const landingFromAbove = movingBody.velocity.y > 0 && prevPlayerBottom < platformTop && playerBottom >= platformTop;
 
             if (landingFromAbove) {
               if (movingActor.type === 'player') {
