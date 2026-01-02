@@ -205,10 +205,12 @@ class PhysicsGame {
     this.bodies.forEach(b => World.remove(this.engine.world, b));
     this.bodies.clear();
     this.contacts.clear();
+    this.pausedPlayers.clear();
     this.nextNetId = 1;
     this.frame = 0;
     this.stage_over = false;
     this.stage_over_time = 0;
+    this.paused = false;
 
     const levelPath = `levels/stage${stageNum}.json`;
     try {
@@ -261,15 +263,22 @@ class PhysicsGame {
     });
     body._width = width;
     body._height = height;
+    body._prevPos = { x: pos[0], y: pos[1] };
 
     World.add(this.engine.world, body);
 
     const state = { removed: false };
+    const allowedFields = new Set(schema.fields);
     for (const field of schema.fields) {
-      if (extra.hasOwnProperty(field)) {
+      if (extra.hasOwnProperty(field) && allowedFields.has(field)) {
         state[field] = extra[field];
       } else if (schema.defaults.hasOwnProperty(field)) {
         state[field] = schema.defaults[field];
+      }
+    }
+    for (const field in extra) {
+      if (!allowedFields.has(field)) {
+        console.warn(`[SPAWN] Rejected invalid field "${field}" for type "${type}"`);
       }
     }
     if (type === 'enemy' && !extra.speed) {
@@ -450,6 +459,12 @@ class PhysicsGame {
     const checked = new Set();
     const contactingPlatforms = new Map();
 
+    for (const [name, actor] of this.actors) {
+      if (actor.type === 'breakable_platform' && actor.state._hit_this_frame) {
+        actor.state._hit_this_frame.clear();
+      }
+    }
+
     for (const [nameA, actorA] of this.actors) {
       if (actorA.type === 'player' || actorA.type === 'enemy') {
         contactingPlatforms.set(nameA, []);
@@ -514,9 +529,11 @@ class PhysicsGame {
               }
 
               if (platformActor.type === 'breakable_platform') {
-                const alreadyHit = platformActor.state._broken_by === movingActor.name;
-                if (!alreadyHit) {
-                  platformActor.state._broken_by = movingActor.name;
+                if (!platformActor.state._hit_this_frame) {
+                  platformActor.state._hit_this_frame = new Set();
+                }
+                if (!platformActor.state._hit_this_frame.has(movingActor.name)) {
+                  platformActor.state._hit_this_frame.add(movingActor.name);
                   platformActor.state.hit_count++;
                   if (movingActor.type === 'player') {
                     movingActor.state.score += 10;
@@ -768,7 +785,10 @@ wss.on('connection', (ws) => {
       } else if (action === 'jump') {
         game.pendingInput.set(playerId, { action: 'jump' });
       } else if (action === 'nextstage') {
-        game.nextStage();
+        const actor = game.playerActors.get(playerId);
+        if (actor && actor.state._goal_reached) {
+          game.nextStage();
+        }
       } else if (action === 'pause') {
         game.pausedPlayers.add(playerId);
         if (game.pausedPlayers.size === game.clients.size) {
@@ -804,20 +824,6 @@ wss.on('connection', (ws) => {
     console.error('WebSocket error:', err.message);
   });
 });
-
-app.get('/api/stats', (req, res) => {
-  const uptime = Math.round((Date.now() - stats.initTime) / 1000);
-  res.json({
-    uptime,
-    messagesSent: stats.messagesSent,
-    bytesPerSecond: stats.bytesPerSecond,
-    messagesSentPerSecond: stats.messagesSentPerSecond,
-    peakBytesPerSecond: stats.peakBytesPerSecond,
-    avgBytesPerMessage: stats.messagesSent > 0 ? Math.round((stats.windowBytes) / stats.windowMessages) : 0,
-    encoding: 'msgpack'
-  });
-});
-
 
 app.get('/api/status', (req, res) => {
   const players = [];
@@ -903,7 +909,8 @@ app.post('/api/input', (req, res) => {
     return res.status(400).json({ error: 'player_id and action required' });
   }
   if (action === 'move') {
-    game.pendingInput.set(player_id, { action: 'move', direction: direction || 0 });
+    const dir = direction > 0 ? 1 : direction < 0 ? -1 : 0;
+    game.pendingInput.set(player_id, { action: 'move', direction: dir });
   } else if (action === 'jump') {
     game.pendingInput.set(player_id, { action: 'jump' });
   }
