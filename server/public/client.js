@@ -609,25 +609,15 @@ class GameClient {
     document.addEventListener('keydown', (e) => {
       const action = keyMap[e.key];
       if (!action) return;
-
-      if (action === 'jump') {
-        this.keysHeld.jump = true;
-      } else {
-        this.keysHeld[action] = true;
-        this.updateMovement();
-      }
+      if (action === 'jump') this.keysHeld.jump = true;
+      else this.keysHeld[action] = true;
     });
 
     document.addEventListener('keyup', (e) => {
       const action = keyMap[e.key];
       if (!action) return;
-
-      if (action === 'jump') {
-        this.keysHeld.jump = false;
-      } else {
-        this.keysHeld[action] = false;
-        this.updateMovement();
-      }
+      if (action === 'jump') this.keysHeld.jump = false;
+      else this.keysHeld[action] = false;
     });
 
     document.addEventListener('keydown', (e) => {
@@ -658,18 +648,16 @@ class GameClient {
     });
   }
 
-  updateMovement() {
-    if (this.paused) return;
-    let direction = 0;
-    if (this.keysHeld.right) direction = 1;
-    if (this.keysHeld.left) direction = -1;
-    this.sendInput('move', direction);
-    this.applyMovementPrediction(direction);
-  }
 
   applyMovementPrediction(direction) {
     const player = this.getLocalPlayer();
     if (!player) return;
+
+    // Only apply prediction if actually moving
+    if (direction === 0) {
+      this.predictedPos = null;
+      return;
+    }
 
     if (!this.predictedPos) {
       this.predictedPos = [player.pos[0], player.pos[1]];

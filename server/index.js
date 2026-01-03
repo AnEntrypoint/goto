@@ -968,8 +968,16 @@ class PhysicsGame {
 
   getSpawnPosition(playerId) {
     const baseX = 640;
-    const baseY = 620;
     const searchRadius = 100;
+
+    const lowestPlatform = Array.from(this.actors.values()).reduce((max, actor) => {
+      if (!actor.state.removed && (actor.type === 'platform' || actor.type === 'breakable_platform')) {
+        return Math.max(max, actor.body.position.y);
+      }
+      return max;
+    }, -Infinity);
+
+    const baseY = lowestPlatform > 0 ? lowestPlatform - 24 : 620;
 
     const isValidSpawn = (pos) => {
       for (const actor of this.actors.values()) {
