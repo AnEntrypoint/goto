@@ -457,8 +457,10 @@ class PhysicsGame {
       return null;
     }
 
-    const width = extra.width || 32;
-    const height = (type === 'platform' || type === 'breakable_platform') ? 16 : 32;
+    let width = extra.width || 32;
+    let height = (type === 'platform' || type === 'breakable_platform') ? 16 : 32;
+    if (height <= 0) height = 16;
+    if (width <= 0) width = 32;
     const isStatic = type === 'platform' || type === 'breakable_platform';
 
     const body = Body.create({
@@ -956,11 +958,11 @@ class PhysicsGame {
             platformBody = bodyA;
           }
 
-          if (movingActor && platformActor) {
+          if (movingActor && platformActor && !platformActor.state.removed) {
             const movW = movingBody._width || 32;
             const movH = movingBody._height || 32;
             const platW = platformBody._width || 32;
-            const platH = platformBody._height || 16;
+            const platH = Math.max(1, platformBody._height || 16);
             if (!isFinite(movW) || !isFinite(movH) || movW <= 0 || movH <= 0 ||
                 !isFinite(platW) || !isFinite(platH) || platW <= 0 || platH <= 0) {
               console.error(`[COLLISION] Invalid dimensions for collision: mov=${movW}x${movH}, plat=${platW}x${platH}`);
@@ -1008,9 +1010,10 @@ class PhysicsGame {
                   }
                   if (!platformActor.state._hit_this_frame.has(movingActor.name)) {
                     platformActor.state._hit_this_frame.add(movingActor.name);
-                    const newHitCount = Math.min(platformActor.state.hit_count + 1, 2147483647);
-                    platformActor.state.hit_count = newHitCount;
-                    if (movingActor.type === 'player') {
+                    const hitCountBefore = platformActor.state.hit_count;
+                    const hitCountAfter = Math.min(hitCountBefore + 1, 2147483647);
+                    platformActor.state.hit_count = hitCountAfter;
+                    if (movingActor.type === 'player' && hitCountBefore < platformActor.state.max_hits && hitCountAfter >= platformActor.state.max_hits) {
                       if (!isFinite(movingActor.state.score) || movingActor.state.score < 0) {
                         console.error(`[SCORE] Invalid player score ${movingActor.state.score}, resetting to 0`);
                         movingActor.state.score = 0;
