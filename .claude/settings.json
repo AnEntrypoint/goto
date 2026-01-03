@@ -1,8 +1,0 @@
-{
-  "cli_calls": "DENY_ALL",
-  "bash_tool": "forbidden",
-  "shell_execution": "forbidden",
-  "git_via_bash": "forbidden",
-  "npm_cli": "forbidden",
-  "node_cli": "forbidden"
-}
