@@ -986,33 +986,47 @@ class PhysicsGame {
     }
     this.pendingInput.clear();
 
-    for (const [playerId, input] of this.heldInput) {
-      if (!input || typeof input !== 'object') {
+    for (const [playerId, actor] of this.playerActors) {
+      if (!actor || !actor.body || actor.state.removed || actor.state.respawn_time > 0) {
         this.heldInput.delete(playerId);
+        if (actor && actor.body) {
+          actor.body.velocity.x = 0;
+        }
         continue;
       }
-      const actor = this.playerActors.get(playerId);
-      if (!actor || !actor.body || actor.state.removed || actor.state.respawn_time > 0) continue;
+
+      const input = this.heldInput.get(playerId);
+      if (!input || typeof input !== 'object') {
+        this.heldInput.delete(playerId);
+        actor.body.velocity.x = 0;
+        continue;
+      }
+
       if (input.action === 'move') {
         const dir = input.direction;
         if (typeof dir !== 'number' || !isFinite(dir)) {
           console.warn(`[INPUT] Held move direction invalid for player ${playerId}: ${dir}`);
+          this.heldInput.delete(playerId);
+          actor.body.velocity.x = 0;
           continue;
         }
         if (!isFinite(actor.state.speed) || actor.state.speed <= 0) {
           console.error(`[INPUT] Player ${playerId} has invalid speed ${actor.state.speed}`);
+          actor.body.velocity.x = 0;
           continue;
         }
         const vel = dir * actor.state.speed;
         if (!isFinite(vel)) {
           console.error(`[INPUT] Computed velocity is not finite for player ${playerId}: ${vel}`);
+          actor.body.velocity.x = 0;
           continue;
         }
         actor.body.velocity.x = vel;
+      } else {
+        actor.body.velocity.x = 0;
       }
     }
   }
-
   getSpawnPosition(playerId) {
     const baseX = 640;
     const searchRadius = 100;
