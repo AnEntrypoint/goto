@@ -5,7 +5,6 @@ const fs = require('fs');
 const path = require('path');
 const { Engine, World, Body, Events, Composite } = require('matter-js');
 
-const { StructuredLogger, FrameProfiler, MemoryMetrics, ActorLifecycleTracker, CollisionStats, NetworkMetrics, PlayerDisconnectTracker, AlertingRules, SLODefinitions, PrometheusMetrics } = require('./observability');
 const PORT = process.env.PORT || 3008;
 const TICK_RATE = 60;
 const TICK_MS = 1000 / TICK_RATE;
@@ -274,17 +273,6 @@ class PhysicsGame {
     this.inputRateLimit = new Map();
     this.stageTransitionTimeouts = [];
     this.MAX_ACTORS = 1500;
-    this.logger = new StructuredLogger();
-    this.logger.start();
-    this.frameProfiler = new FrameProfiler();
-    this.memoryMetrics = new MemoryMetrics();
-    this.collisionStats = new CollisionStats();
-    this.networkMetrics = new NetworkMetrics();
-    this.actorLifecycle = new ActorLifecycleTracker();
-    this.playerDisconnects = new PlayerDisconnectTracker();
-    this.alerting = new AlertingRules();
-    this.slos = new SLODefinitions();
-    this.prometheus = new PrometheusMetrics();
     this.loadStage(1);
   }
 
@@ -551,8 +539,6 @@ class PhysicsGame {
 
   tick() {
     const wasPaused = this.paused;
-    const tickStart = Date.now();
-    
     if (!wasPaused) {
       if (this.frame >= 2147483647) {
         console.error(`[FRAME_OVERFLOW] Frame ${this.frame} would overflow, resetting to 0`);
@@ -562,10 +548,7 @@ class PhysicsGame {
       const frameSnapshot = this.frame;
 
       try {
-      this.frameProfiler.startPhase('input_processing');
         this.processPendingInput();
-      this.frameProfiler.endPhase('input_processing');
-      this.frameProfiler.startPhase('respawn_update');
       } catch (e) {
         console.error(`[TICK_INPUT_ERROR] Frame ${frameSnapshot}: ${e.message}`);
         this.pendingInput.clear();
@@ -574,16 +557,12 @@ class PhysicsGame {
 
       try {
         this.updateRespawns();
-      this.frameProfiler.endPhase('respawn_update');
-      this.frameProfiler.startPhase('actor_update');
       } catch (e) {
         console.error(`[TICK_RESPAWN_ERROR] Frame ${frameSnapshot}: ${e.message}`);
       }
 
       try {
         this.updateActors();
-      this.frameProfiler.endPhase('actor_update');
-      this.frameProfiler.startPhase('collision_detection');
       } catch (e) {
         console.error(`[TICK_UPDATE_ERROR] Frame ${frameSnapshot}: ${e.message}`);
       }
@@ -638,8 +617,6 @@ class PhysicsGame {
 
       try {
         this.checkCollisions(actorSnapshot);
-      this.frameProfiler.endPhase('collision_detection');
-      this.frameProfiler.startPhase('goal_check');
       } catch (e) {
         console.error(`[TICK_COLLISION_ERROR] Frame ${frameSnapshot}: ${e.message}`);
       }
@@ -647,7 +624,6 @@ class PhysicsGame {
       try {
         if (!this.paused) {
           this.checkGoal(frameSnapshot);
-        this.frameProfiler.endPhase('goal_check');
         }
       } catch (e) {
         console.error(`[TICK_GOAL_ERROR] Frame ${frameSnapshot}: ${e.message}`);
@@ -663,28 +639,7 @@ class PhysicsGame {
     }
 
     try {
-      this.frameProfiler.startPhase('removal');
       this.removeDeadActors();
-      this.frameProfiler.endPhase('removal');
-
-      const tickMs = Date.now() - tickStart;
-      this.frameProfiler.metrics.total_tick_ms.push(tickMs);
-      if (this.frameProfiler.metrics.total_tick_ms.length > 60) {
-        this.frameProfiler.metrics.total_tick_ms.shift();
-      }
-      const profileResult = this.frameProfiler.recordTick();
-      if (profileResult) {
-        this.networkMetrics.recordFrame();
-        const memResult = this.memoryMetrics.recordFrame();
-        const collResult = this.collisionStats.recordFrame();
-        this.slos.recordFrame();
-        if (memResult && memResult.alert) {
-          this.alerting.checkHeapUsage(memResult.sample.heap_used_mb);
-        }
-        if (profileResult.total_tick && profileResult.total_tick.p99) {
-          this.alerting.checkFrameTimeP99(profileResult.total_tick.p99);
-        }
-      }
     } catch (e) {
       console.error(`[TICK_CLEANUP_ERROR] Frame ${this.frame}: ${e.message}`);
     }
@@ -1851,11 +1806,6 @@ wss.on('connection', (ws) => {
   });
 
   ws.on('close', () => {
-      if (client && typeof client.playerId === 'number') {
-        const durationSeconds = Math.floor((Date.now() - (client.connectedAt || Date.now())) / 1000);
-        const finalScore = client.actor ? (client.actor.state.score || 0) : 0;
-        game.playerDisconnects.recordDisconnect(client.playerId, 'close', durationSeconds, finalScore);
-      }
     console.error(`[DISCONNECT] Player ${playerId}`);
     for (const [name, actor] of game.actors) {
       if (actor && actor.state && actor.state.player_id === playerId) {
@@ -2326,70 +2276,6 @@ const gracefulShutdown = (signal) => {
 
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-
-
-app.get('/metrics', (req, res) => {
-  const ip = req.ip || req.connection.remoteAddress;
-  if (!checkIPRateLimit(ip)) {
-    return res.status(429).text('Rate limit exceeded');
-  }
-  res.setHeader('Content-Type', 'text/plain; version=0.0.4');
-
-  const profiling = game.frameProfiler.getMetrics();
-  const memory = game.memoryMetrics.getMetrics();
-  const collisions = game.collisionStats.getMetrics();
-  const network = game.networkMetrics.getMetrics();
-  const alerts = game.alerting.getMetrics();
-  const sli = game.slos.getSLI();
-
-  game.prometheus.recordGauge('game_frame_number', game.frame);
-  game.prometheus.recordGauge('game_stage', game.stage);
-  game.prometheus.recordGauge('game_actors_count', game.actors.size);
-  game.prometheus.recordGauge('game_clients_count', game.clients.size);
-  game.prometheus.recordHistogram('tick_duration_ms', profiling.total_tick.avg);
-  game.prometheus.recordHistogram('input_processing_ms', profiling.input_processing.avg);
-  game.prometheus.recordHistogram('actor_update_ms', profiling.actor_update.avg);
-  game.prometheus.recordHistogram('collision_detection_ms', profiling.collision_detection.avg);
-  game.prometheus.recordHistogram('goal_check_ms', profiling.goal_check.avg);
-  game.prometheus.recordGauge('memory_heap_used_mb', memory?.latest?.heap_used_mb || 0);
-  game.prometheus.recordGauge('network_broadcast_success_rate', network.avg_success_rate);
-  game.prometheus.recordCounter('network_broadcast_failures', network.total_failures);
-  game.prometheus.recordGauge('collisions_player_platform_avg', collisions.avg_player_platform);
-  game.prometheus.recordGauge('collisions_player_enemy_avg', collisions.avg_player_enemy);
-  game.prometheus.recordGauge('slo_uptime', sli.sli_uptime);
-  game.prometheus.recordGauge('alerts_total', alerts.total_alerts);
-
-  res.send(game.prometheus.export());
-});
-
-app.get('/api/observability', (req, res) => {
-  const ip = req.ip || req.connection.remoteAddress;
-  if (!checkIPRateLimit(ip)) {
-    return res.status(429).json({ error: 'Rate limit exceeded' });
-  }
-
-  const profiling = game.frameProfiler.getMetrics();
-  const memory = game.memoryMetrics.getMetrics();
-  const collisions = game.collisionStats.getMetrics();
-  const network = game.networkMetrics.getMetrics();
-  const disconnects = game.playerDisconnects.getMetrics();
-  const alerts = game.alerting.getMetrics();
-  const sli = game.slos.getSLI();
-  const lifecycle = game.actorLifecycle.getMetrics();
-
-  res.json({
-    frame: game.frame,
-    stage: game.stage,
-    profiling,
-    memory,
-    collisions,
-    network,
-    player_disconnects: disconnects,
-    actor_lifecycle: lifecycle,
-    alerts,
-    slos: sli
-  });
-});
 
 server.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
