@@ -32,7 +32,7 @@ if (new Set(MSG_TYPE_VALUES).size !== MSG_TYPE_VALUES.length) {
 
 const PHYSICS = {
   GRAVITY: 1200,
-  JUMP_VELOCITY: -450,
+  JUMP_VELOCITY: -1200,
   PLAYER_SPEED: 200,
   ENEMY_SPEED: 120,
   MAX_FALL_SPEED: 800,
@@ -291,7 +291,7 @@ class PhysicsGame {
     this.stageCheckpoints = new Map();
     this.playerScores = new Map();
     this.spawnCountThisFrame = 0;
-    this.MAX_SPAWNS_PER_TICK = 10;
+    this.MAX_SPAWNS_PER_TICK = 100;
     this.lastHeartbeatTime = Date.now();
     this.heartbeatInterval = null;
     this.alertState = { fired: false };
@@ -967,16 +967,11 @@ class PhysicsGame {
   }
 
   getSpawnPosition(playerId) {
-    const maxX = 1230;
-    const minX = 50;
-    const spreadX = (maxX - minX) / Math.max(1, this.playerActors.size + 1);
-    const baseX = minX + spreadX * playerId;
-    const baseY = 656;
+    const baseX = 640;
+    const baseY = 620;
     const searchRadius = 100;
 
     const isValidSpawn = (pos) => {
-      const playerRadius = 16;
-
       for (const actor of this.actors.values()) {
         if (actor.state.removed) continue;
         const dx = Math.abs(actor.body.position.x - pos[0]);
@@ -1141,8 +1136,6 @@ class PhysicsGame {
           if (actor.state._coyote_counter < 6) {
             actor.state._coyote_counter++;
           }
-        } else if (actor.body.velocity.y === 0 && actor.body.position.y < 700) {
-          actor.body.velocity.y = 20;
         }
         if (!isFinite(actor.body.velocity.x) || !isFinite(actor.body.velocity.y)) {
           console.error(`[NAN] Actor ${name} has invalid velocity: ${actor.body.velocity.x}, ${actor.body.velocity.y}`);
@@ -2211,7 +2204,6 @@ wss.on('connection', (ws) => {
       const validActions = ['move', 'jump', 'nextstage', 'pause', 'resume'];
       if (!validActions.includes(action)) return;
 
-      const client = game.clients.get(playerId);
       if (client) {
         client.lastActivity = Date.now();
       }
@@ -2558,6 +2550,17 @@ app.post('/api/input', (req, res) => {
     game.pendingInput.set(player_id, { action: 'jump', _seq: inputSeq });
     actor.state._last_action_seq = inputSeq;
   }
+  res.json({ ok: true });
+});
+
+app.post('/api/client-log', (req, res) => {
+  const { level, message, context } = req.body || {};
+  if (!level || !message) {
+    return res.status(400).json({ error: 'level and message required' });
+  }
+  const timestamp = new Date().toISOString();
+  const contextStr = context ? JSON.stringify(context).slice(0, 200) : '';
+  console.log(`[CLIENT] [${level.toUpperCase()}] ${timestamp} ${message} ${contextStr}`);
   res.json({ ok: true });
 });
 

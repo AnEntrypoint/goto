@@ -18,11 +18,47 @@ let debugLogs = [];
 const API_BASE = 'http://localhost:3008';
 const PORT = process.env.PORT || 3008;
 
+async function killOrphanedServerProcess() {
+  try {
+    const isWindows = process.platform === 'win32';
+    if (isWindows) {
+      await new Promise((resolve) => {
+        exec(`netstat -ano | findstr :${PORT}`, (error, stdout) => {
+          if (stdout) {
+            const lines = stdout.split('\n').filter(l => l.includes('LISTENING'));
+            const pids = new Set();
+            lines.forEach(line => {
+              const parts = line.trim().split(/\s+/);
+              const pid = parts[parts.length - 1];
+              if (pid && !isNaN(pid) && pid !== '0') pids.add(pid);
+            });
+            pids.forEach(pid => {
+              try {
+                exec(`taskkill /PID ${pid} /F`, () => {});
+              } catch (e) {}
+            });
+          }
+          resolve();
+        });
+      });
+    }
+  } catch (e) {
+    // Ignore errors, best effort cleanup
+  }
+}
+
 async function startServer() {
   if (serverProcess) {
     serverProcess.kill('SIGTERM');
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await new Promise(resolve => setTimeout(resolve, 800));
+    if (serverProcess && !serverProcess.killed) {
+      serverProcess.kill('SIGKILL');
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
   }
+
+  await killOrphanedServerProcess();
+  await new Promise(resolve => setTimeout(resolve, 500));
 
   debugLogs = [];
   console.error(`[MCP] Starting game server on port ${PORT}...`);
@@ -52,7 +88,7 @@ async function startServer() {
     serverProcess = null;
   });
 
-  await new Promise(resolve => setTimeout(resolve, 1500));
+  await new Promise(resolve => setTimeout(resolve, 2000));
   return { content: [{ type: 'text', text: `Game server started on port ${PORT}` }] };
 }
 
