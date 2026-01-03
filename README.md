@@ -1,194 +1,68 @@
-# Ice Climber .io - Multiplayer Game
+# Ice Climber .io - Game Server
 
-A modern, multiplayer interpretation of the classic Ice Climber arcade game, built with Node.js and WebSocket networking.
-
-## Features
-
-- **Multiplayer networking** - WebSocket-based real-time multiplayer
-- **Binary messaging** - msgpack compression for bandwidth efficiency
-- **Client-side prediction** - Reduced input lag through local position prediction
-- **Delta compression** - Only changed actor states transmitted (94% bandwidth reduction)
-- **Server-authoritative physics** - Secure, server-verified game state
-- **4-stage campaign** - Progressive difficulty levels
-- **Arcade physics** - Jump, climb, and breakable platforms with classic feel
-
-## Technology Stack
-
-- **Server**: Node.js + Express + ws + msgpackr
-- **Client**: Vanilla JavaScript + Canvas 2D
-- **Physics**: Custom implementation with AABB collision detection
-- **Networking**: WebSocket + Binary msgpack protocol
+Production-grade multiplayer game server with real-time physics, networking, and observability.
 
 ## Quick Start
 
-### Prerequisites
-- Node.js 14+
-- npm
-
-### Installation
+### Development
 
 ```bash
-cd server
 npm install
+NODE_ENV=development PORT=3008 node server/index.js
 ```
 
-### Running Locally
+Health check: `curl http://localhost:3008/health`
+
+### Docker
 
 ```bash
-npm start
+docker build -t game-server:latest .
+docker run -p 3008:3008 -e NODE_ENV=production game-server:latest
 ```
 
-Server starts on `http://localhost:3008`
-Open in browser to play: `http://localhost:3008`
-
-### Development Mode
+### Kubernetes
 
 ```bash
-npm run dev
+kubectl apply -f k8s/
 ```
 
-Runs with file watching and dev-server utilities.
+## Configuration
 
-## Game Architecture
+### Environment Variables
 
-### Server (server/index.js)
-
-- Game state management and physics simulation
-- Actor spawning and removal
-- Collision detection and response
-- Level loading from JSON
-- WebSocket message handling
-
-### Client (server/public/client.js)
-
-- Input handling (keyboard)
-- Client-side prediction for movement
-- Rendering loop with camera system
-- State reconciliation with server
-- UI and HUD rendering
-
-### Networking Protocol
-
-Uses msgpack binary format for efficiency:
-```
-Message Types:
-- INIT (0): Initial game state
-- UPDATE (1): State changes (position, velocity, etc.)
-- GOAL (2): Player reached goal
-- STAGELOAD (3): New stage loaded
-- SPAWN (4): New actor created
-- REMOVE (5): Actor removed
-- PAUSE (6): Game paused
-- RESUME (7): Game resumed
-- GAME_WON (8): Final stage completed
+```bash
+PORT=3008                              # Server port (1000-65535)
+NODE_ENV=development|production        # Environment mode
+LOG_LEVEL=debug|info|warn|error        # Logging level
+API_KEY=<secret>                       # API authentication
+DATABASE_URL=<connection-string>       # Player data persistence
 ```
 
-## Physics Constants
+### Config Files
 
-Located in `server/index.js`:
+- `config.development.json` - Development settings
+- `config.production.json` - Production settings
+- `.env.example` - Example environment variables
 
-```javascript
-GRAVITY: 1200         // Pixels/second²
-JUMP_VELOCITY: -450   // Pixels/second
-PLAYER_SPEED: 200     // Pixels/second
-MAX_FALL_SPEED: 800   // Pixels/second
-```
+## Endpoints
 
-Tune these to adjust gameplay feel.
-
-## Level Format
-
-Levels stored in `game/levels/stageN.json`:
-
-```json
-{
-  "name": "Stage Name",
-  "platforms": [
-    {"x": 640, "y": 680, "width": 400, "breakable": false},
-    {"x": 200, "y": 600, "width": 200, "breakable": true, "max_hits": 2}
-  ],
-  "enemies": [
-    {"x": 200, "y": 568, "speed": 150, "dir": 1}
-  ],
-  "goal": {"x": 640, "y": 40}
-}
-```
-
-## Performance Optimizations
-
-- **Delta compression**: Only send changed actor properties (reduces update size by 94%)
-- **Client-side prediction**: Eliminate perceived input lag
-- **Binary messaging**: msgpack reduces protocol overhead by 50%+
-- **State checksums**: Detect client/server desync every 10 frames
-
-## Known Issues & TODOs
-
-- Collision detection still being refined (see COLLISION-STATS logging)
-- Breakable platform logic needs further testing
-- Multi-player score tracking incomplete
-- No persistence/leaderboards yet
+- `GET /health` - Liveness probe
+- `GET /ready` - Readiness probe
+- `GET /metrics` - Prometheus metrics
+- `ws://localhost:3008` - Game connection
 
 ## Deployment
 
-### Docker (Recommended)
+See `DEPLOYMENT.md` for detailed instructions on Docker and Kubernetes deployment.
 
-```dockerfile
-FROM node:18-alpine
-WORKDIR /app
-COPY server/package*.json ./
-RUN npm ci --only=production
-COPY server/ .
-EXPOSE 3008
-CMD ["npm", "start"]
-```
+## Monitoring
 
-### Platform.sh / Heroku
+See `SLI.md` for service level indicators and `alert-rules.yml` for Prometheus alerts.
 
-Set environment variable:
-```
-PORT=3008
-```
+## Incident Response
 
-The app will start on the configured port.
-
-## Development Notes
-
-### Adding a New Stage
-
-1. Create `game/levels/stageN.json` with level layout
-2. Physics is server-side; client just renders
-3. Test with dev server: `npm run dev`
-
-### Debugging
-
-- Server logs collision stats every 120 frames: `[COLLISION-STATS]`
-- Client shows desync warnings: `[DESYNC]`
-- Enable debug mode: Press F3 in browser (shows frame numbers)
-
-### Testing Locally
-
-```bash
-# Terminal 1
-npm start
-
-# Terminal 2
-curl http://localhost:3008/api/status
-curl http://localhost:3008/api/levels
-curl -X POST http://localhost:3008/api/spawn/player -H "Content-Type: application/json" -d '{"x": 640, "y": 100}'
-```
-
-## Performance Targets
-
-- Input lag: <50ms (with client-side prediction)
-- Network: <5KB/sec per player (delta compression)
-- Server CPU: Single core capable of 10+ concurrent players
-- Memory: ~20MB base + 1-2MB per player
-
-## Credits
-
-Classic Ice Climber by Taito (1984)
-Modern reimplementation with multiplayer for learning purposes.
+See `INCIDENT_RESPONSE.md` for production troubleshooting guide.
 
 ## License
 
-MIT
+Proprietary - Ice Climber .io

@@ -1,0 +1,48 @@
+groups:
+  - name: game_server_alerts
+    interval: 30s
+    rules:
+      - alert: ServerDown
+        expr: up{job="game-server"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Game server is down"
+          description: "Game server {{ $labels.instance }} is unavailable"
+
+      - alert: HighMemoryUsage
+        expr: container_memory_usage_bytes{pod_name=~"game-server.*"} / (1024*1024*512) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "Game server memory usage is {{ $value }}% of limit"
+
+      - alert: HighCPUUsage
+        expr: rate(container_cpu_usage_seconds_total{pod_name=~"game-server.*"}[5m]) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage"
+          description: "Game server CPU usage is {{ $value }}% of limit"
+
+      - alert: HighErrorRate
+        expr: rate(http_requests_total{job="game-server",status=~"5.."}[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High error rate"
+          description: "Error rate is {{ $value }} requests/sec"
+
+      - alert: LowAvailability
+        expr: up{job="game-server"} < 2
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Low availability"
+          description: "Less than 2 game server instances are running"

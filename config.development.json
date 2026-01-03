@@ -1,0 +1,15 @@
+{
+  "port": 3008,
+  "nodeEnv": "development",
+  "logLevel": "debug",
+  "debug": true,
+  "corsOrigin": "*",
+  "timeouts": {
+    "api": 30000,
+    "internal": 5000
+  },
+  "rateLimit": {
+    "windowMs": 60000,
+    "maxRequests": 1000
+  }
+}
