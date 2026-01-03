@@ -530,9 +530,9 @@ class PhysicsGame {
             continue;
           }
           const width = typeof p.width === 'number' && p.width > 0 && p.width <= 256 ? p.width : 32;
-          const max_hits = typeof p.max_hits === 'number' && p.max_hits > 0 ? p.max_hits : 3;
           const isBreakable = p.breakable === true;
-          const actor = this.spawn(isBreakable ? 'breakable_platform' : 'platform', [p.x, p.y], { max_hits, width });
+          const extra = isBreakable ? { width, max_hits: typeof p.max_hits === 'number' && p.max_hits > 0 ? p.max_hits : 3 } : { width };
+          const actor = this.spawn(isBreakable ? 'breakable_platform' : 'platform', [p.x, p.y], extra);
           if (actor) platformCount++;
         } catch (e) {
           console.error(`[LOAD_PLATFORM] Error: ${e.message}`);
@@ -569,24 +569,48 @@ class PhysicsGame {
     }
 
     try {
-      for (const [playerId, playerState] of savedPlayers) {
-        try {
-          const spawnPos = this.getSpawnPosition(playerId);
-          if (!spawnPos || !Array.isArray(spawnPos) || spawnPos.length < 2 ||
-              typeof spawnPos[0] !== 'number' || typeof spawnPos[1] !== 'number') {
-            console.error(`[LOAD_PLAYER] Invalid spawn position for player ${playerId}`);
-            continue;
+      if (savedPlayers.size > 0) {
+        // Re-spawn players from previous stage (progression)
+        for (const [playerId, playerState] of savedPlayers) {
+          try {
+            const spawnPos = this.getSpawnPosition(playerId);
+            if (!spawnPos || !Array.isArray(spawnPos) || spawnPos.length < 2 ||
+                typeof spawnPos[0] !== 'number' || typeof spawnPos[1] !== 'number') {
+              console.error(`[LOAD_PLAYER] Invalid spawn position for player ${playerId}`);
+              continue;
+            }
+            const playerSpawnExtra = {
+              player_id: playerId,
+              lives: Math.max(0, playerState.lives || 3),
+              score: Math.max(0, playerState.score || 0),
+              deaths: Math.max(0, playerState.deaths || 0),
+              stage_time: Math.max(0, playerState.stage_time || 0)
+            };
+            this.spawn('player', spawnPos, playerSpawnExtra);
+          } catch (e) {
+            console.error(`[LOAD_PLAYER] Error for player ${playerId}: ${e.message}`);
           }
-          const playerSpawnExtra = {
-            player_id: playerId,
-            lives: Math.max(0, playerState.lives || 3),
-            score: Math.max(0, playerState.score || 0),
-            deaths: Math.max(0, playerState.deaths || 0),
-            stage_time: Math.max(0, playerState.stage_time || 0)
-          };
-          this.spawn('player', spawnPos, playerSpawnExtra);
-        } catch (e) {
-          console.error(`[LOAD_PLAYER] Error for player ${playerId}: ${e.message}`);
+        }
+      } else if (this.clients.size > 0) {
+        // First stage or fresh load - spawn players for connected clients
+        for (const [playerId, client] of this.clients) {
+          try {
+            const spawnPos = this.getSpawnPosition(playerId);
+            if (!spawnPos || !Array.isArray(spawnPos) || spawnPos.length < 2) {
+              console.error(`[LOAD_PLAYER] Invalid spawn position for new player ${playerId}`);
+              continue;
+            }
+            const playerSpawnExtra = {
+              player_id: playerId,
+              lives: 3,
+              score: 0,
+              deaths: 0,
+              stage_time: 0
+            };
+            this.spawn('player', spawnPos, playerSpawnExtra);
+          } catch (e) {
+            console.error(`[LOAD_PLAYER] Error spawning player ${playerId}: ${e.message}`);
+          }
         }
       }
     } catch (e) {
@@ -691,6 +715,10 @@ class PhysicsGame {
     }
     if (type === 'breakable_platform') {
       state._hit_this_frame = new Set();
+    }
+
+    if (type === 'enemy') {
+      state._just_spawned = true;
     }
 
     if (this.nextNetId > 2147483647) {
@@ -821,15 +849,34 @@ class PhysicsGame {
           }
           actor.body.position.x = newX;
           actor.body.position.y = newY;
-          if (actor.state.type === 'player') {
+          if (actor.type === 'player') {
+            // Clamp X position to stage boundaries
             actor.body.position.x = Math.max(0, Math.min(PHYSICS.STAGE_WIDTH, actor.body.position.x));
-            if (actor.body.position.y > PHYSICS.MAX_POSITION_Y) {
-              console.error(`[SECURITY] [BUG #1598] Player Y position exploited: ${actor.body.position.y}, respawning`);
-              actor.state.respawn_time = PHYSICS.RESPAWN_TIME * TICK_RATE;
+
+            // Check if player fell below the bottom of the stage (Y > 720)
+            if (actor.body.position.y > 720) {
+              console.error(`[DEATH] Player ${actor.state.player_id} fell off bottom at Y=${actor.body.position.y.toFixed(1)}`);
               const playerId = actor.state.player_id;
-              actor.state.lives = Math.max(0, Math.min(9, actor.state.lives - 1));
+              actor.state.deaths = Math.min(actor.state.deaths + 1, 999);
+              actor.state.lives = Math.max(0, actor.state.lives - 1);
+              actor.state.respawn_time = PHYSICS.RESPAWN_TIME;
+              actor.state._respawn_frames_remaining = Math.round(PHYSICS.RESPAWN_TIME * TICK_RATE);
+              actor.state.invulnerable = PHYSICS.INVULNERABILITY_TIME;
+              actor.state._invulnerable_frames_remaining = 90;
               this.dataStore.recordDeath(playerId, this.frame);
-              actor.body.position = { x: this.spawnX, y: this.spawnY };
+
+              // Respawn at spawn position
+              const spawnPos = this.getSpawnPosition(playerId);
+              if (spawnPos && Array.isArray(spawnPos) && spawnPos.length >= 2) {
+                actor.body.position = { x: spawnPos[0], y: spawnPos[1] };
+                actor.body.velocity = { x: 0, y: 0 };
+              }
+            }
+
+            // Remove if too far out of bounds (safety net)
+            if (actor.body.position.y > PHYSICS.MAX_POSITION_Y) {
+              console.error(`[SECURITY] [BUG #1598] Player Y position exploited: ${actor.body.position.y}, removing`);
+              actor.state.removed = true;
             }
           }
           if (actor.body.position.x < -1000 || actor.body.position.x > 2280 ||
@@ -1040,6 +1087,7 @@ class PhysicsGame {
 
       if (actor.state._respawn_frames_remaining > 0) {
         actor.state._respawn_frames_remaining--;
+        actor.state.respawn_time = Math.max(0, actor.state._respawn_frames_remaining / TICK_RATE);
         try {
           game.heldInput.delete(actor.state.player_id);
         } catch (e) {
@@ -1263,8 +1311,9 @@ class PhysicsGame {
               const xOverlap = playerRight >= platformLeft && playerLeft <= platformRight;
               const landingFromAbove = xOverlap && movingBody.velocity.y > 0 && prevPlayerBottom < platformTop && playerBottom >= platformTop;
               const restingOnPlatform = xOverlap && playerBottom >= platformTop && playerBottom <= platformBot;
+              const justSpawned = movingActor.state._just_spawned === true;
 
-              if (landingFromAbove || restingOnPlatform) {
+              if (landingFromAbove || restingOnPlatform || justSpawned) {
                 movingBody.velocity.y = 0;
                 if (!movingActor.state._landed_this_frame) {
                   movingActor.state._coyote_counter = 0;
@@ -1330,6 +1379,9 @@ class PhysicsGame {
       const actor = this.actors.get(actorName);
       if (actor) {
         actor.state.on_ground = contactList.length > 0;
+        if (actor.state._just_spawned) {
+          actor.state._just_spawned = false;
+        }
       }
     }
     for (const [name, actor] of this.actors) {
