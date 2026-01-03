@@ -914,7 +914,6 @@ class PhysicsGame {
         console.error(`[TICK_GAMESTATE_ERROR] Frame ${frameSnapshot}: ${e.message}`);
       }
 
-      this._tickFrameSnapshot = frameSnapshot;
     }
 
     try {
@@ -1701,15 +1700,15 @@ class PhysicsGame {
       console.error(`[BROADCAST_CACHE] Failed to update cache: ${e.message}`);
     }
 
-    const data = { version, frame: this._tickFrameSnapshot || this.frame, stage: this.stage };
+    const data = { version, frame: this.frame, stage: this.stage };
     if (Object.keys(actors).length > 0) {
       data.actors = actors;
     }
 
-    if ((this._tickFrameSnapshot || this.frame) % 10 === 0) {
+    if ((this.frame) % 10 === 0) {
       try {
         let checksum = computeStateChecksum(this.actors);
-        checksum = (checksum + (this._tickFrameSnapshot || this.frame)) >>> 0;
+        checksum = (checksum + (this.frame)) >>> 0;
         if (checksum === 0) {
           console.warn(`[CHECKSUM] Checksum is 0`);
         }
@@ -2156,7 +2155,7 @@ setInterval(() => {
       const anyConnectedPaused = connectedCount > 0;
       if (game.paused && !anyConnectedPaused && game.clients.size > 0) {
         game.paused = false;
-        game.broadcastToClients(buildResumeMessage(game._tickFrameSnapshot || game.frame));
+        game.broadcastToClients(buildResumeMessage(game.frame));
       } else if (game.clients.size === 0 && (game.paused || game.pausedPlayers.size > 0)) {
         game.paused = false;
         game.pausedPlayers.clear();
@@ -2303,7 +2302,7 @@ wss.on('connection', (ws) => {
           const allConnectedPaused = connectedCount > 0 && connectedCount === game.clients.size;
           if (allConnectedPaused && !game.paused) {
             game.paused = true;
-            game.broadcastToClients(buildPauseMessage(game._tickFrameSnapshot || game.frame));
+            game.broadcastToClients(buildPauseMessage(game.frame));
           }
         }
       } else if (action === 'resume') {
@@ -2314,7 +2313,7 @@ wss.on('connection', (ws) => {
           const anyConnectedPaused = connectedCount > 0;
           if (!anyConnectedPaused && game.clients.size > 0 && game.paused) {
             game.paused = false;
-            game.broadcastToClients(buildResumeMessage(game._tickFrameSnapshot || game.frame));
+            game.broadcastToClients(buildResumeMessage(game.frame));
           }
         }
       }
@@ -2357,7 +2356,7 @@ wss.on('connection', (ws) => {
       game.paused = false;
       game.pausedPlayers.clear();
       if (game.clients.size > 0) {
-        game.broadcastToClients(buildResumeMessage(game._tickFrameSnapshot || game.frame));
+        game.broadcastToClients(buildResumeMessage(game.frame));
       }
     }
   });
