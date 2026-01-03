@@ -98,6 +98,14 @@ class FrameProfiler {
     }
   }
 
+  clearMetrics() {
+    for (const key in this.metrics) {
+      if (Array.isArray(this.metrics[key])) {
+        this.metrics[key].length = 0;
+      }
+    }
+  }
+
   recordTick() {
     this.frameCount++;
     if (this.frameCount % this.sampleInterval === 0) {
@@ -375,7 +383,7 @@ class AlertingRules {
     this.alerts = [];
     this.rules = {
       frame_time_p99_ms: { threshold: 20, triggered: false },
-      heap_usage_mb: { threshold: 300, triggered: false },
+      heap_usage_mb: { threshold: 300, resetThreshold: 250, triggered: false },
       errors_per_minute: { threshold: 10, triggered: false },
       broadcast_failure_rate: { threshold: 5, triggered: false }
     };
@@ -395,13 +403,19 @@ class AlertingRules {
   }
 
   checkHeapUsage(heapMB) {
-    const triggered = heapMB > this.rules.heap_usage_mb.threshold;
-    if (triggered && !this.rules.heap_usage_mb.triggered) {
-      this.recordAlert('heap_usage_exceeded', { heap_mb: heapMB, threshold_mb: this.rules.heap_usage_mb.threshold });
-      this.rules.heap_usage_mb.triggered = true;
-    } else if (!triggered && this.rules.heap_usage_mb.triggered) {
-      this.rules.heap_usage_mb.triggered = false;
+    const alertThreshold = this.rules.heap_usage_mb.threshold;
+    const resetThreshold = this.rules.heap_usage_mb.resetThreshold;
+    let triggered = this.rules.heap_usage_mb.triggered;
+
+    if (!triggered && heapMB > alertThreshold) {
+      triggered = true;
+      this.recordAlert('heap_usage_exceeded', { heap_mb: heapMB, threshold_mb: alertThreshold });
+      console.error(`[RESILIENCE] [BUG #1647] Memory alert fired: ${heapMB.toFixed(1)}MB > ${alertThreshold}MB (reset at ${resetThreshold}MB)`);
+    } else if (triggered && heapMB < resetThreshold) {
+      triggered = false;
+      console.error(`[RESILIENCE] [BUG #1647] Memory alert reset: ${heapMB.toFixed(1)}MB < ${resetThreshold}MB`);
     }
+    this.rules.heap_usage_mb.triggered = triggered;
   }
 
   recordError() {
@@ -428,13 +442,20 @@ class AlertingRules {
   }
 
   recordAlert(alertType, context) {
+    const contextStr = JSON.stringify(context);
+    const limitedContext = contextStr.length > 1024 ? JSON.parse(contextStr.substring(0, 1024)) : context;
+
     const alert = {
       type: alertType,
       timestamp: Date.now(),
-      context
+      context: limitedContext
     };
     this.alerts.push(alert);
-    console.error(JSON.stringify({ level: 'error', code: 'ALERT', alert }));
+    try {
+      console.error(JSON.stringify({ level: 'error', code: 'ALERT', alert }));
+    } catch (e) {
+      console.error(`[ALERT_RECORD] Failed to log alert: ${alertType}`);
+    }
     if (this.alerts.length > 100) {
       this.alerts.shift();
     }

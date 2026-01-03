@@ -6,6 +6,7 @@ const path = require('path');
 const { Engine, World, Body, Events, Composite } = require('matter-js');
 
 const { StructuredLogger, FrameProfiler, MemoryMetrics, ActorLifecycleTracker, CollisionStats, NetworkMetrics, PlayerDisconnectTracker, AlertingRules, SLODefinitions, PrometheusMetrics } = require('./observability');
+const { DataStore } = require('./state-store');
 const PORT = process.env.PORT || 3008;
 const TICK_RATE = 60;
 const TICK_MS = 1000 / TICK_RATE;
@@ -36,13 +37,18 @@ const PHYSICS = {
   ENEMY_SPEED: 120,
   MAX_FALL_SPEED: 800,
   INVULNERABILITY_TIME: 1.5,
-  RESPAWN_TIME: 5
+  RESPAWN_TIME: 5,
+  MAX_VELOCITY: 200,
+  STAGE_WIDTH: 1280,
+  STAGE_HEIGHT: 1000,
+  MAX_POSITION_Y: 1000
 };
 if (PHYSICS.GRAVITY <= 0 || PHYSICS.MAX_FALL_SPEED <= 0 || PHYSICS.PLAYER_SPEED <= 0 ||
     PHYSICS.ENEMY_SPEED <= 0 || PHYSICS.INVULNERABILITY_TIME <= 0 || PHYSICS.RESPAWN_TIME <= 0 ||
     PHYSICS.JUMP_VELOCITY >= 0) {
   throw new Error('Invalid PHYSICS constants: gravity/speed/times must be positive, jump_velocity must be negative');
 }
+Object.freeze(PHYSICS);
 
 const STATE_SCHEMAS = {
   player: {
@@ -67,6 +73,11 @@ if (STATE_SCHEMAS.player.defaults.lives < 0 || STATE_SCHEMAS.player.defaults.spe
     STATE_SCHEMAS.platform.defaults.width < 1) {
   throw new Error('Invalid STATE_SCHEMAS defaults: must be non-negative and sensible');
 }
+Object.freeze(STATE_SCHEMAS);
+Object.freeze(Object.values(STATE_SCHEMAS).forEach(schema => {
+  Object.freeze(schema);
+  Object.freeze(schema.defaults);
+}));
 
 function validateLevelFiles() {
   for (let i = 1; i <= 4; i++) {
@@ -273,7 +284,17 @@ class PhysicsGame {
     this.loading = false;
     this.inputRateLimit = new Map();
     this.stageTransitionTimeouts = [];
+    this.allIntervals = [];
+    this.allTimeouts = [];
     this.MAX_ACTORS = 1500;
+    this.pausingGame = false;
+    this.stageCheckpoints = new Map();
+    this.playerScores = new Map();
+    this.spawnCountThisFrame = 0;
+    this.MAX_SPAWNS_PER_TICK = 10;
+    this.lastHeartbeatTime = Date.now();
+    this.heartbeatInterval = null;
+    this.alertState = { fired: false };
     this.logger = new StructuredLogger();
     this.logger.start();
     this.frameProfiler = new FrameProfiler();
@@ -285,7 +306,108 @@ class PhysicsGame {
     this.alerting = new AlertingRules();
     this.slos = new SLODefinitions();
     this.prometheus = new PrometheusMetrics();
+    this.dataStore = new DataStore();
+    this.startHeartbeat();
     this.loadStage(1);
+  }
+
+  startHeartbeat() {
+    if (this.heartbeatInterval) clearInterval(this.heartbeatInterval);
+    this.heartbeatInterval = setInterval(() => {
+      this.sendHeartbeat();
+    }, 30000);
+    this.allIntervals.push(this.heartbeatInterval);
+  }
+
+  sendHeartbeat() {
+    const deadClients = [];
+    const now = Date.now();
+    this.clients.forEach((client, playerId) => {
+      if (!client || !client.ws) {
+        deadClients.push(playerId);
+        return;
+      }
+      const timeSinceLastActivity = now - (client.lastActivity || now);
+      if (timeSinceLastActivity > 60000) {
+        console.error(`[RESILIENCE] [BUG #1634] Zombie connection timeout for player ${playerId}, disconnecting`);
+        deadClients.push(playerId);
+        try {
+          client.ws.close(1000, 'Heartbeat timeout');
+        } catch (e) {
+          console.error(`[HEARTBEAT_CLOSE] Failed to close ws: ${e.message}`);
+        }
+      } else if (client.ws.readyState === WebSocket.OPEN) {
+        try {
+          client.ws.ping();
+        } catch (e) {
+          console.error(`[HEARTBEAT_PING] Failed to ping player ${playerId}: ${e.message}`);
+          deadClients.push(playerId);
+        }
+      }
+    });
+    for (const playerId of deadClients) {
+      this.disconnectPlayer(playerId);
+    }
+  }
+
+  disconnectPlayer(playerId) {
+    const client = this.clients.get(playerId);
+    if (client) {
+      try {
+        if (client.ws && client.ws.readyState === WebSocket.OPEN) {
+          client.ws.close(1000, 'Server disconnect');
+        }
+      } catch (e) {
+        console.error(`[DISCONNECT_PLAYER] Failed to close ws for ${playerId}: ${e.message}`);
+      }
+    }
+    this.clients.delete(playerId);
+    this.heldInput.delete(playerId);
+    this.pendingInput.delete(playerId);
+    this.pausedPlayers.delete(playerId);
+    this.inputRateLimit.delete(playerId);
+    const actor = this.playerActors.get(playerId);
+    if (actor && !actor.state.removed) {
+      actor.state.removed = true;
+    }
+    this.playerActors.delete(playerId);
+  }
+
+  saveCheckpoint(stage) {
+    const checkpoint = [];
+    try {
+      for (const [playerId, actor] of this.playerActors) {
+        if (!actor || actor.state.removed) continue;
+        const score = actor.state.score || 0;
+        this.playerScores.set(playerId, score);
+        this.dataStore.updatePlayerScore(playerId, score);
+        checkpoint.push({
+          playerId,
+          score,
+          lives: actor.state.lives || 3,
+          deaths: actor.state.deaths || 0,
+          x: actor.body.position.x,
+          y: actor.body.position.y
+        });
+      }
+      this.stageCheckpoints.set(stage, checkpoint);
+      console.error(`[RESILIENCE] [BUG #1628] Stage ${stage} checkpoint saved: ${checkpoint.length} players`);
+    } catch (e) {
+      console.error(`[CHECKPOINT_SAVE] Error: ${e.message}`);
+    }
+  }
+
+  restoreCheckpoint(stage) {
+    try {
+      const checkpoint = this.stageCheckpoints.get(stage);
+      if (checkpoint && Array.isArray(checkpoint)) {
+        console.error(`[RESILIENCE] [BUG #1628] Restoring checkpoint for stage ${stage}: ${checkpoint.length} players`);
+        return checkpoint;
+      }
+    } catch (e) {
+      console.error(`[CHECKPOINT_RESTORE] Error: ${e.message}`);
+    }
+    return null;
   }
 
   clearStageTransitionTimeouts() {
@@ -295,22 +417,43 @@ class PhysicsGame {
     this.stageTransitionTimeouts.length = 0;
   }
 
+  cleanup() {
+    for (const intervalId of this.allIntervals) {
+      clearInterval(intervalId);
+    }
+    this.allIntervals.length = 0;
+    for (const timeoutId of this.allTimeouts) {
+      clearTimeout(timeoutId);
+    }
+    this.allTimeouts.length = 0;
+    this.clearStageTransitionTimeouts();
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+  }
+
   loadStage(stageNum) {
     this.loading = true;
     this.stage = stageNum;
     this.clearStageTransitionTimeouts();
+    this.spawnCountThisFrame = 0;
     const savedPlayers = new Map();
     try {
       for (const [playerId, actor] of this.playerActors) {
         if (!actor || actor.state.removed) continue;
         if (typeof actor.state.lives !== 'number') actor.state.lives = 3;
+        actor.state.lives = Math.max(0, Math.min(9, actor.state.lives));
         if (typeof actor.state.score !== 'number') actor.state.score = 0;
+        actor.state.score = Math.max(0, Math.min(999999, actor.state.score));
         if (typeof actor.state.deaths !== 'number') actor.state.deaths = 0;
+        actor.state.deaths = Math.max(0, Math.min(999, actor.state.deaths));
         if (typeof actor.state.stage_time !== 'number') actor.state.stage_time = 0;
+        const persistedScore = this.dataStore.getPlayerScore(playerId) || 0;
         savedPlayers.set(playerId, {
           player_id: playerId,
           lives: actor.state.lives,
-          score: actor.state.score,
+          score: persistedScore,
           deaths: actor.state.deaths,
           stage_time: actor.state.stage_time
         });
@@ -343,13 +486,18 @@ class PhysicsGame {
     }
 
     const levelPath = `levels/stage${stageNum}.json`;
+    let loadTimeout = null;
     try {
       const filePath = path.join(__dirname, '..', 'game', levelPath);
+      loadTimeout = setTimeout(() => {
+        throw new Error('Level load timeout exceeded (5 seconds)');
+      }, 5000);
       if (!fs.existsSync(filePath)) throw new Error(`Level file not found: ${filePath}`);
       const stats = fs.statSync(filePath);
       if (stats.size > 10485760) throw new Error(`Level file too large: ${stats.size} bytes (max 10MB)`);
       const data = fs.readFileSync(filePath, 'utf8');
       this.level = JSON.parse(data);
+      clearTimeout(loadTimeout);
       if (!this.level || typeof this.level !== 'object') throw new Error('Invalid level format');
       if (typeof this.level.name !== 'string' || this.level.name.length > 100) this.level.name = `Stage ${stageNum}`;
       if (!this.level.goal || typeof this.level.goal.x !== 'number' || typeof this.level.goal.y !== 'number' ||
@@ -357,7 +505,8 @@ class PhysicsGame {
         throw new Error(`Invalid level goal: ${JSON.stringify(this.level.goal)}`);
       }
     } catch (e) {
-      console.error(`[LOAD_FILE] Failed to load stage ${stageNum}: ${e.message}`);
+      if (loadTimeout) clearTimeout(loadTimeout);
+      console.error(`[RESILIENCE] [BUG #1642] Failed to load stage ${stageNum}: ${e.message}`);
       this.level = { name: 'Error', platforms: [], enemies: [], goal: { x: 640, y: 360 } };
     }
 
@@ -464,6 +613,11 @@ class PhysicsGame {
       return null;
     }
 
+    if (this.spawnCountThisFrame >= this.MAX_SPAWNS_PER_TICK) {
+      console.error(`[RESILIENCE] [BUG #1660] Spawn limit per tick exceeded: ${this.spawnCountThisFrame}/${this.MAX_SPAWNS_PER_TICK}`);
+      return null;
+    }
+
     if (this.actors.size >= this.MAX_ACTORS) {
       console.error(`[SPAWN] Actor limit (${this.MAX_ACTORS}) reached, rejecting ${type}`);
       return null;
@@ -471,6 +625,12 @@ class PhysicsGame {
 
     if (!Array.isArray(pos) || pos.length < 2 || typeof pos[0] !== 'number' || typeof pos[1] !== 'number') {
       console.error(`[SPAWN] Invalid position for ${type}: ${JSON.stringify(pos)}`);
+      return null;
+    }
+
+    const isValidPos = isFinite(pos[0]) && isFinite(pos[1]) && pos[0] >= 0 && pos[0] <= PHYSICS.STAGE_WIDTH && pos[1] >= 0 && pos[1] <= PHYSICS.STAGE_HEIGHT;
+    if (!isValidPos) {
+      console.error(`[RESILIENCE] [BUG #1635] Invalid spawn location for ${type}: [${pos[0]}, ${pos[1]}]`);
       return null;
     }
 
@@ -522,6 +682,12 @@ class PhysicsGame {
     if (type === 'player') {
       state._goal_reached = false;
       state._landed_this_frame = false;
+      if (state.player_id && typeof state.player_id === 'number') {
+        const restoredScore = this.dataStore.getPlayerScore(state.player_id);
+        if (restoredScore > 0) {
+          state.score = restoredScore;
+        }
+      }
     }
     if (type === 'breakable_platform') {
       state._hit_this_frame = new Set();
@@ -546,13 +712,15 @@ class PhysicsGame {
       this.playerActors.set(extra.player_id, actor);
     }
 
+    this.spawnCountThisFrame++;
     return actor;
   }
 
   tick() {
     const wasPaused = this.paused;
     const tickStart = Date.now();
-    
+    this.spawnCountThisFrame = 0;
+
     if (!wasPaused) {
       if (this.frame >= 2147483647) {
         console.error(`[FRAME_OVERFLOW] Frame ${this.frame} would overflow, resetting to 0`);
@@ -573,11 +741,13 @@ class PhysicsGame {
       }
 
       try {
+        this.pausingGame = false;
         this.updateRespawns();
       this.frameProfiler.endPhase('respawn_update');
       this.frameProfiler.startPhase('actor_update');
       } catch (e) {
         console.error(`[TICK_RESPAWN_ERROR] Frame ${frameSnapshot}: ${e.message}`);
+        this.paused = false;
       }
 
       try {
@@ -609,12 +779,38 @@ class PhysicsGame {
       for (const [name, actor] of actorSnapshot) {
         if (!actor || !actor.body || actor.state.removed) continue;
         try {
-          const vx = actor.body.velocity.x;
-          const vy = actor.body.velocity.y;
+          if (!isFinite(actor.body.position.x) || !isFinite(actor.body.position.y)) {
+            console.error(`[RESILIENCE] [BUG #1624] Actor ${name} has NaN position: ${actor.body.position.x}, ${actor.body.position.y}`);
+            if (actor.type === 'player') {
+              actor.state.respawn_time = PHYSICS.RESPAWN_TIME * TICK_RATE;
+              const playerId = actor.state.player_id;
+              actor.state.lives = Math.max(0, Math.min(9, actor.state.lives - 1));
+              this.dataStore.recordDeath(playerId, this.frame);
+              const spawnPos = this.getSpawnPosition(playerId);
+              if (spawnPos && Array.isArray(spawnPos)) {
+                actor.body.position.x = spawnPos[0];
+                actor.body.position.y = spawnPos[1];
+              } else {
+                actor.state.removed = true;
+              }
+            } else {
+              actor.state.removed = true;
+            }
+            continue;
+          }
+          let vx = actor.body.velocity.x;
+          let vy = actor.body.velocity.y;
           if (!isFinite(vx) || !isFinite(vy)) {
             console.error(`[NAN_VELOCITY] Actor ${name} has NaN velocity: ${vx}, ${vy}`);
             actor.state.removed = true;
             continue;
+          }
+          if (Math.abs(vx) > PHYSICS.MAX_VELOCITY || Math.abs(vy) > PHYSICS.MAX_FALL_SPEED) {
+            console.error(`[SECURITY] [BUG #1599] Velocity overflow detected: vx=${vx} vy=${vy}, clamping`);
+            vx = Math.max(-PHYSICS.MAX_VELOCITY, Math.min(PHYSICS.MAX_VELOCITY, vx));
+            vy = Math.max(-PHYSICS.MAX_FALL_SPEED, Math.min(PHYSICS.MAX_FALL_SPEED, vy));
+            actor.body.velocity.x = vx;
+            actor.body.velocity.y = vy;
           }
           const newX = actor.body.position.x + vx * (TICK_MS / 1000);
           const newY = actor.body.position.y + vy * (TICK_MS / 1000);
@@ -625,6 +821,17 @@ class PhysicsGame {
           }
           actor.body.position.x = newX;
           actor.body.position.y = newY;
+          if (actor.state.type === 'player') {
+            actor.body.position.x = Math.max(0, Math.min(PHYSICS.STAGE_WIDTH, actor.body.position.x));
+            if (actor.body.position.y > PHYSICS.MAX_POSITION_Y) {
+              console.error(`[SECURITY] [BUG #1598] Player Y position exploited: ${actor.body.position.y}, respawning`);
+              actor.state.respawn_time = PHYSICS.RESPAWN_TIME * TICK_RATE;
+              const playerId = actor.state.player_id;
+              actor.state.lives = Math.max(0, Math.min(9, actor.state.lives - 1));
+              this.dataStore.recordDeath(playerId, this.frame);
+              actor.body.position = { x: this.spawnX, y: this.spawnY };
+            }
+          }
           if (actor.body.position.x < -1000 || actor.body.position.x > 2280 ||
               actor.body.position.y < -1000 || actor.body.position.y > 1720) {
             console.error(`[BOUNDS] Actor ${name} out of bounds: ${actor.body.position.x}, ${actor.body.position.y}`);
@@ -695,6 +902,10 @@ class PhysicsGame {
     for (const [playerId, input] of this.pendingInput) {
       if (!input || typeof input !== 'object') {
         console.error(`[INPUT] Invalid input object for player ${playerId}`);
+        continue;
+      }
+      if (!this.clients.has(playerId)) {
+        console.error(`[RESILIENCE] [BUG #1653] Input from disconnected player ${playerId}, skipping`);
         continue;
       }
       const actor = this.playerActors.get(playerId);
@@ -832,7 +1043,12 @@ class PhysicsGame {
           console.error(`[RESPAWN_INPUT_CLEANUP] Player ${actor.state.player_id}: ${e.message}`);
         }
 
-        if (actor.state._respawn_frames_remaining <= 0) {
+        if (actor.state._respawn_frames_remaining <= 0 && !this.stage_transitioning) {
+          if (this.stage_transitioning) {
+            console.error(`[RESILIENCE] [BUG #1652] Respawn suppressed during stage transition`);
+            actor.state._respawn_frames_remaining = 1;
+            continue;
+          }
           try {
             let spawnPos = this.getSpawnPosition(actor.state.player_id);
             if (!spawnPos || !Array.isArray(spawnPos) || spawnPos.length < 2 ||
@@ -860,11 +1076,11 @@ class PhysicsGame {
               actor.state.respawn_time = 0;
               actor.state._respawn_frames_remaining = 0;
               actor.state.on_ground = true;
-              actor.state._coyote_counter = 0;
+              actor.state._coyote_counter = Math.max(0, Math.min(6, actor.state._coyote_counter));
               actor.state._goal_reached = false;
               actor.state.invulnerable = PHYSICS.INVULNERABILITY_TIME;
-              actor.state._invulnerable_frames_remaining = Math.round(PHYSICS.INVULNERABILITY_TIME * TICK_RATE);
-              console.log(`[RESPAWN] Player ${actor.state.player_id} respawned at [${spawnPos[0]}, ${spawnPos[1]}]`);
+              actor.state._invulnerable_frames_remaining = 90;
+              console.log(`[RESPAWN] Player ${actor.state.player_id} respawned at [${spawnPos[0]}, ${spawnPos[1]}], invulnerable for 1.5s`);
             }
           } catch (e) {
             console.error(`[RESPAWN_ERROR] Player ${actor.state.player_id}: ${e.message}`);
@@ -966,9 +1182,18 @@ class PhysicsGame {
     }
 
     for (const [nameA, actorA] of actorSnapshot) {
+      try {
+        actorA._iterating = true;
+      } catch (e) {
+        console.error(`[COLLISION_ITERATE] Failed to mark actor iterating: ${e.message}`);
+      }
       for (const [nameB, actorB] of actorSnapshot) {
         if (nameA === nameB) continue;
         if (actorA.state.removed || actorB.state.removed) continue;
+        if (actorA._pending_removal || actorB._pending_removal) {
+          console.error(`[RESILIENCE] [BUG #1638] Skipping collision for removed actor: ${nameA}, ${nameB}`);
+          continue;
+        }
 
         const pairKey = [nameA, nameB].sort().join('|');
         if (checked.has(pairKey)) continue;
@@ -987,15 +1212,16 @@ class PhysicsGame {
             player = actorB;
             enemy = actorA;
           }
-          if (player && enemy && player.state.invulnerable <= 0) {
+          if (player && enemy && player.state._invulnerable_frames_remaining <= 0) {
             if (!hitByEnemyThisFrame.has(player.name)) {
               hitByEnemyThisFrame.add(player.name);
-              player.state.deaths = Math.min(player.state.deaths + 1, 2147483647);
+              player.state.deaths = Math.min(player.state.deaths + 1, 999);
               player.state.lives = Math.max(0, player.state.lives - 1);
               player.state.respawn_time = PHYSICS.RESPAWN_TIME;
               player.state._respawn_frames_remaining = Math.round(PHYSICS.RESPAWN_TIME * TICK_RATE);
               player.state.invulnerable = PHYSICS.INVULNERABILITY_TIME;
-              player.state._invulnerable_frames_remaining = Math.round(PHYSICS.INVULNERABILITY_TIME * TICK_RATE);
+              player.state._invulnerable_frames_remaining = 90;
+              console.error(`[SECURITY] [BUG #1603] Player ${player.state.player_id} hit, respawning with invulnerability`);
             }
           }
 
@@ -1064,27 +1290,38 @@ class PhysicsGame {
                   }
                   if (!platformActor.state._hit_this_frame.has(movingActor.name)) {
                     platformActor.state._hit_this_frame.add(movingActor.name);
-                    const hitCountBefore = platformActor.state.hit_count;
-                    const hitCountAfter = Math.min(hitCountBefore + 1, 2147483647);
-                    platformActor.state.hit_count = hitCountAfter;
-                    if (movingActor.type === 'player' && hitCountBefore < platformActor.state.max_hits && hitCountAfter >= platformActor.state.max_hits) {
-                      if (!isFinite(movingActor.state.score) || movingActor.state.score < 0) {
-                        console.error(`[SCORE] Invalid player score ${movingActor.state.score}, resetting to 0`);
-                        movingActor.state.score = 0;
+                    const hitCountBefore = platformActor.state.hit_count || 0;
+                    const maxHitsVal = platformActor.state.max_hits || 3;
+                    if (hitCountBefore >= maxHitsVal) {
+                      console.error(`[SECURITY] [BUG #1616] Platform already broken, ignoring further hits`);
+                    } else {
+                      const hitCountAfter = hitCountBefore + 1;
+                      platformActor.state.hit_count = Math.min(hitCountAfter, maxHitsVal);
+                      this.dataStore.recordPlatformHit(this.frame, platformActor.name, hitCountAfter);
+                      if (movingActor.type === 'player' && hitCountBefore < maxHitsVal && platformActor.state.hit_count >= maxHitsVal) {
+                        if (!isFinite(movingActor.state.score) || movingActor.state.score < 0) {
+                          console.error(`[SECURITY] Invalid player score ${movingActor.state.score}, resetting to 0`);
+                          movingActor.state.score = 0;
+                        }
+                        movingActor.state.score = Math.min(movingActor.state.score + 10, 999999);
                       }
-                      movingActor.state.score = Math.min(movingActor.state.score + 10, 2147483647);
                     }
                   }
                   if (platformActor.state.hit_count >= platformActor.state.max_hits && !platformActor.state._confirmed_broken) {
                     platformActor.state._confirmed_broken = true;
                     platformActor.state.removed = true;
-                    console.error(`[REMOVE] Breakable platform ${platformActor.name} broken`);
+                    console.error(`[REMOVE] Breakable platform ${platformActor.name} broken after ${platformActor.state.hit_count} hits`);
                   }
                 }
               }
             }
           }
         }
+      }
+      try {
+        actorA._iterating = false;
+      } catch (e) {
+        console.error(`[COLLISION_ITERATE_CLEANUP] Failed to unmark actor: ${e.message}`);
       }
     }
 
@@ -1132,16 +1369,32 @@ class PhysicsGame {
     if (this.stage_transitioning) return;
     if (!this.level.goal || typeof this.level.goal.x !== 'number' || typeof this.level.goal.y !== 'number') return;
     for (const [playerId, actor] of this.playerActors) {
-      if (!actor.state._goal_reached && !actor.state.removed && actor.body && actor.state.respawn_time <= 0) {
+      if (!actor.state._goal_reached && !actor.state.removed && actor.body && actor.state && actor.state.respawn_time <= 0) {
         const dx = actor.body.position.x - this.level.goal.x;
         const dy = actor.body.position.y - this.level.goal.y;
         const distSquared = dx * dx + dy * dy;
         if (distSquared < 1600) {
+          if (!actor.state._score_hash) {
+            actor.state._score_hash = this.computeScoreHash(actor.state.score, actor.state.player_id, this.stage);
+          }
           actor.state._goal_reached = true;
+          actor.state.deaths = Math.min(999, actor.state.deaths);
+          actor.state.score = Math.max(0, actor.state.score);
           this.broadcastGoalReached(actor.state.player_id, frameSnapshot);
         }
       }
     }
+  }
+
+  computeScoreHash(score, playerId, stage) {
+    const data = `${score}_${playerId}_${stage}`;
+    let hash = 0;
+    for (let i = 0; i < data.length; i++) {
+      const char = data.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash;
+    }
+    return Math.abs(hash);
   }
 
   removeDeadActors() {
@@ -1265,6 +1518,16 @@ class PhysicsGame {
     const msg = buildGoalMessage(playerId, this.stage, frameSnapshot);
     this.broadcastToClients(msg);
 
+    this.saveCheckpoint(this.stage);
+
+    for (const [playerId, actor] of this.playerActors) {
+      if (!actor || actor.state.removed) continue;
+      const score = actor.state.score || 0;
+      this.playerScores.set(playerId, score);
+      this.dataStore.updatePlayerScore(playerId, score);
+      this.dataStore.recordGoal(playerId, this.stage, frameSnapshot, score);
+    }
+
     if (this.stage_transitioning) {
       console.warn(`[GOAL] Player ${playerId} reached goal but stage already transitioning, skipping transition`);
       return;
@@ -1353,6 +1616,13 @@ class PhysicsGame {
           serializationFailures++;
           continue;
         }
+        try {
+          JSON.stringify(current);
+        } catch (serErr) {
+          console.error(`[RESILIENCE] [BUG #1639] Serialized actor not JSON-safe: ${name}`);
+          serializationFailures++;
+          continue;
+        }
         currentState.set(name, current);
         const lastState = this.lastActorState.get(name);
         const delta = lastState ? this._computeDelta(current, lastState) : current;
@@ -1365,7 +1635,8 @@ class PhysicsGame {
       }
     }
     if (serializationFailures > 0) {
-      console.error(`[BROADCAST_RISK] ${serializationFailures} actors failed serialization`);
+      console.error(`[RESILIENCE] [BUG #1640] ${serializationFailures} actors failed serialization, aborting broadcast`);
+      return;
     }
 
     try {
@@ -1476,23 +1747,29 @@ class PhysicsGame {
 
     const deadClients = [];
     this.clients.forEach((client, playerId) => {
-      if (client && client.ws) {
-        if (client.ws.readyState === WebSocket.OPEN) {
-          if (client.ws.bufferedAmount > 1000000) {
-            console.error(`[BACKPRESSURE_DISCONNECT] Player ${playerId} buffer overflow: ${client.ws.bufferedAmount} bytes, disconnecting`);
-            deadClients.push(playerId);
-          } else {
-            try {
-              client.ws.send(msg);
-            } catch (e) {
-              console.error(`Broadcast error for player ${playerId}:`, e.message);
-              deadClients.push(playerId);
-            }
-          }
-        } else if (client.ws.readyState !== WebSocket.CONNECTING) {
+      if (!client || !client.ws) {
+        console.error(`[RESILIENCE] [BUG #1625] Null client reference for player ${playerId}`);
+        deadClients.push(playerId);
+        return;
+      }
+      if (client.disconnected) {
+        console.error(`[RESILIENCE] [BUG #1626] Stale client for player ${playerId}, skipping`);
+        deadClients.push(playerId);
+        return;
+      }
+      if (client.ws.readyState === WebSocket.OPEN) {
+        if (client.ws.bufferedAmount > 1000000) {
+          console.error(`[RESILIENCE] [BUG #1643] Backpressure disconnect for player ${playerId}: ${client.ws.bufferedAmount} bytes`);
           deadClients.push(playerId);
+        } else {
+          try {
+            client.ws.send(msg);
+          } catch (e) {
+            console.error(`Broadcast error for player ${playerId}:`, e.message);
+            deadClients.push(playerId);
+          }
         }
-      } else {
+      } else if (client.ws.readyState !== WebSocket.CONNECTING) {
         deadClients.push(playerId);
       }
     });
@@ -1596,16 +1873,30 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 const game = new PhysicsGame();
+
 let nextPlayerId = 0;
+const assignedPlayerIds = new Set();
+
 const getNextPlayerId = () => {
-  if (nextPlayerId >= 2147483647) {
-    console.error('[PLAYERID_OVERFLOW] Player ID counter reset');
-    nextPlayerId = 0;
+  let candidate = ++nextPlayerId;
+  while (assignedPlayerIds.has(candidate)) {
+    candidate++;
+    if (candidate >= 2147483647) {
+      console.error('[SECURITY] [PLAYERID_OVERFLOW] Player ID counter reset');
+      candidate = 1;
+    }
   }
-  return ++nextPlayerId;
+  assignedPlayerIds.add(candidate);
+  return candidate;
 };
+
 const ipRateLimit = new Map();
 const IP_RATE_LIMIT_TTL = 3600000;
+const playerActionCooldowns = new Map();
+const requestIdCache = new Map();
+const wsAuthTracker = new Map();
+const spawnRateLimit = new Map();
+const pauseTracker = new Map();
 
 const checkIPRateLimit = (ip) => {
   const now = Date.now();
@@ -1620,6 +1911,101 @@ const checkIPRateLimit = (ip) => {
         ipRateLimit.delete(ipAddr);
       }
     }
+  }
+  return true;
+};
+
+const checkPlayerActionCooldown = (playerId, actionType, frameNum) => {
+  if (!playerActionCooldowns.has(playerId)) {
+    playerActionCooldowns.set(playerId, {});
+  }
+  const playerCooldowns = playerActionCooldowns.get(playerId);
+  const lastFrame = playerCooldowns[actionType] || 0;
+  const minFrameGap = 4;
+  if (frameNum - lastFrame < minFrameGap) {
+    console.error(`[SECURITY] [BUG #1581] Action spam detected: player=${playerId} action=${actionType} gap=${frameNum - lastFrame}`);
+    return false;
+  }
+  playerCooldowns[actionType] = frameNum;
+  return true;
+};
+
+const checkRequestDeduplication = (requestId) => {
+  if (requestIdCache.has(requestId)) {
+    console.error(`[SECURITY] [BUG #1592] Duplicate request detected: ${requestId}`);
+    return false;
+  }
+  requestIdCache.set(requestId, Date.now());
+  if (requestIdCache.size > 10000) {
+    const now = Date.now();
+    for (const [id, timestamp] of requestIdCache) {
+      if (now - timestamp > 5000) {
+        requestIdCache.delete(id);
+      }
+    }
+  }
+  return true;
+};
+
+const checkClientTimestamp = (clientTimestamp) => {
+  const serverTime = Date.now();
+  const delta = Math.abs(serverTime - clientTimestamp);
+  if (delta > 5000) {
+    console.error(`[SECURITY] [BUG #1593] Timestamp out of sync: delta=${delta}ms`);
+    return false;
+  }
+  return true;
+};
+
+const checkSpawnRateLimit = (ip) => {
+  const now = Date.now();
+  if (!spawnRateLimit.has(ip)) {
+    spawnRateLimit.set(ip, { count: 0, window: now });
+  }
+  const entry = spawnRateLimit.get(ip);
+  if (now - entry.window > 60000) {
+    entry.count = 0;
+    entry.window = now;
+  }
+  if (entry.count >= 10) {
+    console.error(`[SECURITY] [BUG #1601] Spawn rate limit exceeded: ip=${ip}`);
+    return false;
+  }
+  entry.count++;
+  return true;
+};
+
+const checkActorOverlapCollision = (position, radius = 100) => {
+  for (const actor of game.actors.values()) {
+    if (!actor || !actor.body) continue;
+    const dx = actor.body.position.x - position[0];
+    const dy = actor.body.position.y - position[1];
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < radius) {
+      console.error(`[SECURITY] [BUG #1602] Platform spawn collision: dist=${dist}`);
+      return true;
+    }
+  }
+  return false;
+};
+
+const sanitize = (str) => {
+  if (typeof str !== 'string') return str;
+  return str.replace(/[<>&"']/g, c => ({
+    '<': '&lt;', '>': '&gt;', '&': '&amp;',
+    '"': '&quot;', "'": '&#39;'
+  }[c]));
+};
+
+const checkPauseLimit = (playerId, stage) => {
+  const key = `${playerId}-${stage}`;
+  if (!pauseTracker.has(key)) {
+    pauseTracker.set(key, { count: 0, totalTime: 0 });
+  }
+  const entry = pauseTracker.get(key);
+  if (entry.count >= 3) {
+    console.error(`[SECURITY] [BUG #1606] Max pauses exceeded: player=${playerId}`);
+    return false;
   }
   return true;
 };
@@ -1766,6 +2152,7 @@ wss.on('connection', (ws) => {
   }
   const playerId = getNextPlayerId();
   console.error(`[CONNECT] Player ${playerId} connected (${game.clients.size + 1}/${100})`);
+  game.dataStore.recordPlayerJoin(playerId, `player_${playerId}`);
   const spawnPos = game.getSpawnPosition(playerId);
   const actor = game.spawn('player', spawnPos, { player_id: playerId });
   if (!actor) {
@@ -1774,7 +2161,16 @@ wss.on('connection', (ws) => {
     return;
   }
 
-  const client = { ws, playerId, lastActivity: Date.now() };
+  wsAuthTracker.set(playerId, { authenticated: false, connectedAt: Date.now() });
+  const authTimeoutId = setTimeout(() => {
+    if (wsAuthTracker.has(playerId) && !wsAuthTracker.get(playerId).authenticated) {
+      console.error(`[SECURITY] [BUG #1585] WebSocket auth timeout: player_${playerId}`);
+      ws.close(1008, 'Auth timeout');
+      wsAuthTracker.delete(playerId);
+    }
+  }, 5000);
+
+  const client = { ws, playerId, lastActivity: Date.now(), authTimeoutId, connectedAt: Date.now(), actor };
   game.clients.set(playerId, client);
 
   const actors = Array.from(game.actors.values())
@@ -1795,6 +2191,19 @@ wss.on('connection', (ws) => {
         return;
       }
       if (!data || typeof data !== 'object') return;
+
+      const authEntry = wsAuthTracker.get(playerId);
+      if (!authEntry || !authEntry.authenticated) {
+        if (data.type === 'AUTH') {
+          wsAuthTracker.set(playerId, { authenticated: true, connectedAt: authEntry?.connectedAt || Date.now() });
+          clearTimeout(client.authTimeoutId);
+          console.error(`[SECURITY] Player ${playerId} authenticated`);
+          return;
+        } else {
+          console.error(`[SECURITY] [BUG #1585] Unauthenticated message from player_${playerId}: ${data.type}`);
+          return;
+        }
+      }
 
       const { action, direction } = data;
       if (typeof action !== 'string') return;
@@ -1824,6 +2233,17 @@ wss.on('connection', (ws) => {
         }
       } else if (action === 'pause') {
         if (game.clients.has(playerId)) {
+          if (!checkPauseLimit(playerId, game.stage)) {
+            console.error(`[SECURITY] [BUG #1606] Pause limit exceeded for player_${playerId}`);
+            return;
+          }
+          const pauseKey = `${playerId}-${game.stage}`;
+          if (!pauseTracker.has(pauseKey)) {
+            pauseTracker.set(pauseKey, { count: 0, totalTime: 0 });
+          }
+          const pauseEntry = pauseTracker.get(pauseKey);
+          pauseEntry.count++;
+          pauseEntry.pauseStartTime = Date.now();
           game.pausedPlayers.add(playerId);
           const pausedSnapshot = Array.from(game.pausedPlayers);
           const connectedCount = pausedSnapshot.filter(pid => game.clients.has(pid)).length;
@@ -1857,8 +2277,14 @@ wss.on('connection', (ws) => {
         game.playerDisconnects.recordDisconnect(client.playerId, 'close', durationSeconds, finalScore);
       }
     console.error(`[DISCONNECT] Player ${playerId}`);
+    console.error(`[RESILIENCE] [BUG #1633] Broadcasting checkpoint before disconnect for player ${playerId}`);
+    game.saveCheckpoint(game.stage);
     for (const [name, actor] of game.actors) {
       if (actor && actor.state && actor.state.player_id === playerId) {
+        const score = actor.state.score || 0;
+        game.playerScores.set(playerId, score);
+        game.dataStore.updatePlayerScore(playerId, score);
+        game.dataStore.recordPlayerDisconnect(playerId);
         actor.state.removed = true;
       }
     }
@@ -1985,40 +2411,61 @@ app.post('/api/spawn/:type', (req, res) => {
   if (!checkIPRateLimit(ip)) {
     return res.status(429).json({ error: 'Rate limit exceeded' });
   }
+  if (!checkSpawnRateLimit(ip)) {
+    console.error(`[SECURITY] [BUG #1601] Spawn DDoS blocked: ${ip}`);
+    return res.status(429).json({ error: 'Spawn rate limit exceeded' });
+  }
   const validTypes = ['player', 'enemy', 'platform', 'breakable_platform'];
-  if (!validTypes.includes(req.params.type)) {
+  const type = req.params.type;
+  if (!validTypes.includes(type)) {
+    console.error(`[SECURITY] [BUG #1611] Invalid actor type: ${type}`);
     return res.status(400).json({ error: 'Invalid actor type' });
   }
   let { x = 640, y = 360, ...extra } = req.body || {};
-  if (typeof x !== 'number' || x < 0 || x > 1280) x = 640;
-  if (typeof y !== 'number' || y < 0 || y > 720) y = 360;
+  if (typeof x !== 'number' || !isFinite(x) || x < 0 || x > PHYSICS.STAGE_WIDTH) x = 640;
+  if (typeof y !== 'number' || !isFinite(y) || y < 0 || y > 720) y = 360;
   if (extra.width !== undefined) {
-    if (typeof extra.width !== 'number' || extra.width <= 0 || extra.width > 256) delete extra.width;
+    if (typeof extra.width !== 'number' || !Number.isInteger(extra.width) || extra.width < 32 || extra.width > 256) {
+      console.error(`[SECURITY] [BUG #1612] Invalid platform width: ${extra.width}`);
+      delete extra.width;
+    }
   }
   if (extra.max_hits !== undefined) {
-    if (typeof extra.max_hits !== 'number' || extra.max_hits <= 0) delete extra.max_hits;
+    if (typeof extra.max_hits !== 'number' || !Number.isInteger(extra.max_hits) || extra.max_hits < 1 || extra.max_hits > 10) {
+      console.error(`[SECURITY] [BUG #1617] Invalid max_hits: ${extra.max_hits}`);
+      delete extra.max_hits;
+    }
   }
   if (extra.speed !== undefined) {
-    if (typeof extra.speed !== 'number' || extra.speed <= 0 || extra.speed > 500) delete extra.speed;
+    if (typeof extra.speed !== 'number' || !isFinite(extra.speed) || Math.abs(extra.speed) > 300) {
+      console.error(`[SECURITY] [BUG #1613] Invalid enemy speed: ${extra.speed}`);
+      delete extra.speed;
+    }
   }
   if (extra.patrol_dir !== undefined) {
-    if (typeof extra.patrol_dir !== 'number' || (extra.patrol_dir !== -1 && extra.patrol_dir !== 1)) delete extra.patrol_dir;
-  }
-  if (req.params.type === 'player') {
-    if (extra.player_id === undefined || extra.player_id === null) {
-      extra.player_id = getNextPlayerId();
+    if (typeof extra.patrol_dir !== 'number' || (extra.patrol_dir !== -1 && extra.patrol_dir !== 1)) {
+      console.error(`[SECURITY] [BUG #1614] Invalid patrol direction: ${extra.patrol_dir}`);
+      delete extra.patrol_dir;
     }
+  }
+  if (type === 'player') {
+    if (extra.player_id !== undefined) {
+      console.error(`[SECURITY] [BUG #1584] Manual player_id rejected in spawn: ${extra.player_id}`);
+      delete extra.player_id;
+    }
+    extra.player_id = getNextPlayerId();
     if (game.playerActors.has(extra.player_id)) {
-      return res.status(400).json({ error: 'Player ID already exists' });
+      console.error(`[SECURITY] Player ID collision detected: ${extra.player_id}`);
+      return res.status(400).json({ error: 'Player ID collision' });
     }
     if (extra.lives !== undefined) {
-      if (typeof extra.lives !== 'number' || extra.lives < 0) delete extra.lives;
+      if (typeof extra.lives !== 'number' || !Number.isInteger(extra.lives) || extra.lives < 0) delete extra.lives;
     }
     if (extra.score !== undefined) {
-      if (typeof extra.score !== 'number' || extra.score < 0) delete extra.score;
+      if (typeof extra.score !== 'number' || !Number.isInteger(extra.score) || extra.score < 0) delete extra.score;
     }
     if (extra.deaths !== undefined) {
-      if (typeof extra.deaths !== 'number' || extra.deaths < 0) delete extra.deaths;
+      if (typeof extra.deaths !== 'number' || !Number.isInteger(extra.deaths) || extra.deaths < 0) delete extra.deaths;
     }
     if (extra.stage_time !== undefined) {
       if (typeof extra.stage_time !== 'number' || extra.stage_time < 0) delete extra.stage_time;
@@ -2026,13 +2473,20 @@ app.post('/api/spawn/:type', (req, res) => {
     const spawnPos = game.getSpawnPosition(extra.player_id);
     extra._spawn_x = x;
     extra._spawn_y = y;
-    const actor = game.spawn(req.params.type, spawnPos, extra);
+    extra._invulnerable_frames_remaining = 90;
+    const actor = game.spawn(type, spawnPos, extra);
     if (!actor) {
+      console.error(`[SECURITY] Failed to spawn player: ${extra.player_id}`);
       return res.status(400).json({ error: 'Failed to spawn player' });
     }
   } else {
-    const actor = game.spawn(req.params.type, [x, y], extra);
+    if (checkActorOverlapCollision([x, y])) {
+      console.error(`[SECURITY] [BUG #1602] Collision on spawn prevented`);
+      return res.status(400).json({ error: 'Spawn position blocked' });
+    }
+    const actor = game.spawn(type, [x, y], extra);
     if (!actor) {
+      console.error(`[SECURITY] Failed to spawn actor: ${type}`);
       return res.status(400).json({ error: 'Failed to spawn actor' });
     }
   }
@@ -2044,26 +2498,65 @@ app.post('/api/input', (req, res) => {
   if (!checkIPRateLimit(ip)) {
     return res.status(429).json({ error: 'Rate limit exceeded' });
   }
-  const { player_id, action, direction } = req.body || {};
+  const { player_id, action, direction, requestId, timestamp } = req.body || {};
   if (typeof player_id !== 'number' || !Number.isInteger(player_id) || player_id < 1 || player_id > 2147483647) {
+    console.error(`[SECURITY] [BUG #1589] Invalid player_id type: ${typeof player_id}`);
     return res.status(400).json({ error: 'player_id must be integer 1-2147483647' });
   }
   if (!action || typeof action !== 'string' || !['move', 'jump'].includes(action)) {
+    console.error(`[SECURITY] [BUG #1587] Invalid action: ${action}`);
     return res.status(400).json({ error: 'action must be "move" or "jump"' });
   }
   if (!game.checkInputRateLimit(player_id)) {
     return res.status(429).json({ error: 'Rate limit exceeded' });
   }
+  const actor = game.actors.get(`player_${player_id}`);
+  if (!actor) {
+    console.error(`[SECURITY] [BUG #1591] Actor not found: player_${player_id}`);
+    return res.status(404).json({ error: 'actor not found' });
+  }
+  if (actor.state.respawn_time > 0) {
+    console.error(`[SECURITY] [BUG #1609] Input during respawn: player_${player_id}`);
+    return res.status(400).json({ error: 'respawning' });
+  }
+  if (requestId && !checkRequestDeduplication(requestId)) {
+    return res.status(400).json({ error: 'duplicate_request' });
+  }
+  if (timestamp !== undefined && !checkClientTimestamp(timestamp)) {
+    return res.status(400).json({ error: 'timestamp_out_of_sync' });
+  }
   if (action === 'move') {
-    if (typeof direction !== 'number' || !isFinite(direction)) {
-      return res.status(400).json({ error: 'direction must be a finite number' });
+    if (typeof direction !== 'number') {
+      console.error(`[SECURITY] [BUG #1588] Direction type coercion: ${typeof direction}`);
+      return res.status(400).json({ error: 'direction must be number' });
+    }
+    if (!isFinite(direction)) {
+      console.error(`[SECURITY] [BUG #1588] Direction not finite: ${direction}`);
+      return res.status(400).json({ error: 'direction must be finite' });
+    }
+    if (Math.abs(direction) > 1) {
+      console.error(`[SECURITY] [BUG #1582] Direction magnitude violation: ${direction}`);
+      return res.status(400).json({ error: 'direction must be in [-1, 1]' });
+    }
+    if (!checkPlayerActionCooldown(player_id, 'move', game.frame)) {
+      return res.status(429).json({ error: 'action_cooldown' });
     }
     const dir = normalizeDirection(direction);
     if (dir !== 0) {
-      game.pendingInput.set(player_id, { action: 'move', direction: dir });
+      game.pendingInput.set(player_id, { action: 'move', direction: dir, _seq: (actor.state._last_action_seq || 0) + 1 });
+      actor.state._last_action_seq = (actor.state._last_action_seq || 0) + 1;
     }
   } else if (action === 'jump') {
-    game.pendingInput.set(player_id, { action: 'jump' });
+    if (!checkPlayerActionCooldown(player_id, 'jump', game.frame)) {
+      return res.status(429).json({ error: 'action_cooldown' });
+    }
+    const inputSeq = (actor.state._last_action_seq || 0) + 1;
+    if (inputSeq <= (actor.state._last_action_seq || 0)) {
+      console.error(`[SECURITY] [BUG #1586] Action replay detected: player_${player_id}`);
+      return res.status(400).json({ error: 'replay_attack' });
+    }
+    game.pendingInput.set(player_id, { action: 'jump', _seq: inputSeq });
+    actor.state._last_action_seq = inputSeq;
   }
   res.json({ ok: true });
 });
@@ -2302,18 +2795,25 @@ app.get('/api/perf', (req, res) => {
   });
 });
 const gracefulShutdown = (signal) => {
-  console.error(`[SHUTDOWN] Received ${signal}, closing server gracefully`);
+  console.error(`[RESILIENCE] [BUG #1621] Graceful shutdown initiated: ${signal}`);
   clearInterval(tickInterval);
-  game.clearStageTransitionTimeouts();
+  game.cleanup();
   game.clients.forEach((client, playerId) => {
     try {
-      if (client && client.ws) {
+      if (client && client.ws && client.ws.readyState === WebSocket.OPEN) {
         client.ws.close(1001, 'Server shutting down');
       }
     } catch (e) {
       console.error(`[SHUTDOWN_ERROR] Failed to close client ${playerId}: ${e.message}`);
     }
   });
+  try {
+    game.clients.clear();
+    game.playerActors.clear();
+    game.actors.clear();
+  } catch (e) {
+    console.error(`[SHUTDOWN_CLEANUP] Failed to clear game state: ${e.message}`);
+  }
   server.close(() => {
     console.error('[SHUTDOWN] Server closed');
     process.exit(0);
@@ -2388,6 +2888,55 @@ app.get('/api/observability', (req, res) => {
     actor_lifecycle: lifecycle,
     alerts,
     slos: sli
+  });
+});
+
+app.get('/api/leaderboard', (req, res) => {
+  const ip = req.ip || req.connection.remoteAddress;
+  if (!checkIPRateLimit(ip)) {
+    return res.status(429).json({ error: 'Rate limit exceeded' });
+  }
+  const limit = Math.min(Math.max(parseInt(req.query.limit) || 100, 1), 1000);
+  res.json({
+    leaderboard: game.dataStore.getLeaderboard(limit),
+    timestamp: Date.now(),
+    total_players: game.dataStore.playerScores.size
+  });
+});
+
+app.get('/api/player/:playerId/stats', (req, res) => {
+  const ip = req.ip || req.connection.remoteAddress;
+  if (!checkIPRateLimit(ip)) {
+    return res.status(429).json({ error: 'Rate limit exceeded' });
+  }
+  const playerId = parseInt(req.params.playerId);
+  if (!isFinite(playerId)) {
+    return res.status(400).json({ error: 'Invalid player ID' });
+  }
+  const score = game.dataStore.getPlayerScore(playerId);
+  const completions = game.dataStore.getStageCompletions(playerId);
+  res.json({
+    player_id: playerId,
+    score,
+    stage_completions: completions,
+    timestamp: Date.now()
+  });
+});
+
+app.get('/api/data-integrity', (req, res) => {
+  const ip = req.ip || req.connection.remoteAddress;
+  if (!checkIPRateLimit(ip)) {
+    return res.status(429).json({ error: 'Rate limit exceeded' });
+  }
+  const sizeEst = game.dataStore.getSizeEstimate();
+  const logs = game.dataStore.listAuditLogs();
+  res.json({
+    status: 'healthy',
+    timestamp: Date.now(),
+    storage: sizeEst,
+    audit_logs: logs.length,
+    player_count: game.dataStore.playerScores.size,
+    stage_completions: game.dataStore.playerStageCompletions.size
   });
 });
 
