@@ -2331,7 +2331,7 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 app.get('/metrics', (req, res) => {
   const ip = req.ip || req.connection.remoteAddress;
   if (!checkIPRateLimit(ip)) {
-    return res.status(429).text('Rate limit exceeded');
+    return res.status(429).send('Rate limit exceeded');
   }
   res.setHeader('Content-Type', 'text/plain; version=0.0.4');
 
