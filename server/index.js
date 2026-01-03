@@ -266,12 +266,22 @@ class PhysicsGame {
     this.stage_transitioning = false;
     this.loading = false;
     this.inputRateLimit = new Map();
+    this.stageTransitionTimeouts = [];
+    this.MAX_ACTORS = 1500;
     this.loadStage(1);
+  }
+
+  clearStageTransitionTimeouts() {
+    for (const timeoutId of this.stageTransitionTimeouts) {
+      clearTimeout(timeoutId);
+    }
+    this.stageTransitionTimeouts.length = 0;
   }
 
   loadStage(stageNum) {
     this.loading = true;
     this.stage = stageNum;
+    this.clearStageTransitionTimeouts();
     const savedPlayers = new Map();
     for (const [playerId, actor] of this.playerActors) {
       if (actor.state.removed) continue;
@@ -292,6 +302,7 @@ class PhysicsGame {
     this.frame = 0;
     this.stage_over = false;
     this.stage_over_time = 0;
+    this.level = null;
 
     const levelPath = `levels/stage${stageNum}.json`;
     try {
@@ -378,6 +389,11 @@ class PhysicsGame {
       return null;
     }
 
+    if (this.actors.size >= this.MAX_ACTORS) {
+      console.error(`[SPAWN] Actor limit (${this.MAX_ACTORS}) reached, rejecting ${type}`);
+      return null;
+    }
+
     if (!Array.isArray(pos) || pos.length < 2 || typeof pos[0] !== 'number' || typeof pos[1] !== 'number') {
       console.error(`[SPAWN] Invalid position for ${type}: ${JSON.stringify(pos)}`);
       return null;
@@ -457,23 +473,26 @@ class PhysicsGame {
   }
 
   tick() {
-    if (!this.paused) {
+    const wasPaused = this.paused;
+    if (!wasPaused) {
       this.frame++;
       if (this.frame > 2147483647) {
         console.error(`[FRAME_OVERFLOW] Frame counter reset at ${this.frame}`);
         this.frame = 0;
       }
+      const frameSnapshot = this.frame;
+
       this.processPendingInput();
       this.updateRespawns();
       this.updateActors();
 
-      // Save position BEFORE movement for swept collision detection
-      for (const [name, actor] of this.actors) {
+      const actorSnapshot = Array.from(this.actors.entries());
+      for (const [name, actor] of actorSnapshot) {
         if (!actor.body || actor.state.removed) continue;
         actor.body._prevPos = { x: actor.body.position.x, y: actor.body.position.y };
       }
 
-      for (const [name, actor] of this.actors) {
+      for (const [name, actor] of actorSnapshot) {
         if (!actor.body || actor.state.removed) continue;
         actor.body.position.x += actor.body.velocity.x * (TICK_MS / 1000);
         actor.body.position.y += actor.body.velocity.y * (TICK_MS / 1000);
@@ -485,9 +504,10 @@ class PhysicsGame {
         }
       }
 
-      this.checkCollisions();
-      this.checkGoal();
-      this.updateGameState();
+      this.checkCollisions(actorSnapshot);
+      this.checkGoal(frameSnapshot);
+      this.updateGameState(frameSnapshot);
+      this._tickFrameSnapshot = frameSnapshot;
     }
 
     this.removeDeadActors();
@@ -720,12 +740,12 @@ class PhysicsGame {
     }
   }
 
-  checkCollisions() {
+  checkCollisions(actorSnapshot) {
     const checked = new Set();
     const contactingPlatforms = new Map();
     const hitByEnemyThisFrame = new Set();
 
-    for (const [name, actor] of this.actors) {
+    for (const [name, actor] of actorSnapshot) {
       if (actor.type === 'breakable_platform' && !actor.state.removed) {
         if (actor.state._hit_this_frame && actor.state._hit_this_frame.clear) {
           actor.state._hit_this_frame.clear();
@@ -733,7 +753,7 @@ class PhysicsGame {
       }
     }
 
-    for (const [nameA, actorA] of this.actors) {
+    for (const [nameA, actorA] of actorSnapshot) {
       if (!actorA.state.removed && (actorA.type === 'player' || actorA.type === 'enemy')) {
         if (!contactingPlatforms.has(nameA)) {
           contactingPlatforms.set(nameA, []);
@@ -741,8 +761,8 @@ class PhysicsGame {
       }
     }
 
-    for (const [nameA, actorA] of this.actors) {
-      for (const [nameB, actorB] of this.actors) {
+    for (const [nameA, actorA] of actorSnapshot) {
+      for (const [nameB, actorB] of actorSnapshot) {
         if (nameA === nameB) continue;
         if (actorA.state.removed || actorB.state.removed) continue;
 
@@ -895,14 +915,14 @@ class PhysicsGame {
     return xOverlap && yOverlap;
   }
 
-  checkGoal() {
+  checkGoal(frameSnapshot) {
     if (!this.level.goal || typeof this.level.goal.x !== 'number' || typeof this.level.goal.y !== 'number') return;
     for (const [playerId, actor] of this.playerActors) {
       if (!actor.state._goal_reached && !actor.state.removed && actor.body && actor.state.respawn_time <= 0) {
         const dist = Math.hypot(actor.body.position.x - this.level.goal.x, actor.body.position.y - this.level.goal.y);
         if (dist < 40) {
           actor.state._goal_reached = true;
-          this.broadcastGoalReached(actor.state.player_id);
+          this.broadcastGoalReached(actor.state.player_id, frameSnapshot);
         }
       }
     }
@@ -925,6 +945,13 @@ class PhysicsGame {
         this.heldInput.delete(playerId);
         this.inputRateLimit.delete(playerId);
       }
+      if (actor.state._hit_this_frame && typeof actor.state._hit_this_frame.clear === 'function') {
+        actor.state._hit_this_frame.clear();
+      }
+      actor.state._hit_this_frame = null;
+      if (actor.body && actor.body._prevPos) {
+        actor.body._prevPos = null;
+      }
       World.remove(this.engine.world, actor.body);
       this.actors.delete(name);
       this.bodies.delete(name);
@@ -932,7 +959,7 @@ class PhysicsGame {
     }
   }
 
-  updateGameState() {
+  updateGameState(frameSnapshot) {
     const activePlayers = Array.from(this.actors.values())
       .filter(a => a.type === 'player' && a.state.lives > 0 && a.state.respawn_time <= 0);
 
@@ -942,17 +969,15 @@ class PhysicsGame {
       if (connectedPlayers.length > 0) {
         if (!this.stage_over) {
           this.stage_over = true;
-          this.stage_over_time = this.frame;
-          console.error(`[GAMEOVER] All players eliminated at frame ${this.frame}`);
+          this.stage_over_time = Date.now();
+          console.error(`[GAMEOVER] All players eliminated at frame ${frameSnapshot}`);
         }
       }
     }
 
     if (this.stage_over && !this.stage_transitioning) {
-      const elapsed = this.frame >= this.stage_over_time ?
-        this.frame - this.stage_over_time :
-        (2147483647 - this.stage_over_time) + this.frame + 1;
-      if (elapsed >= 180) {
+      const elapsed = Math.max(0, Date.now() - this.stage_over_time);
+      if (elapsed >= 3000) {
         console.error(`[RESTART] Reloading stage ${this.stage} after 3 seconds`);
         this.stage_transitioning = true;
         try {
@@ -969,8 +994,8 @@ class PhysicsGame {
     }
   }
 
-  broadcastGoalReached(playerId) {
-    const msg = buildGoalMessage(playerId, this.stage, this.frame);
+  broadcastGoalReached(playerId, frameSnapshot) {
+    const msg = buildGoalMessage(playerId, this.stage, frameSnapshot);
     this.broadcastToClients(msg);
 
     if (this.stage_transitioning) {
@@ -978,41 +1003,50 @@ class PhysicsGame {
       return;
     }
 
+    this.stage_transitioning = true;
+    this._stageTransitionPending = true;
+
     if (this.stage === 4) {
       const player = Array.from(this.actors.values()).find(a => !a.state.removed && a.state.player_id === playerId);
       const totalScore = player ? player.state.score || 0 : 0;
-      this.stage_transitioning = true;
       const mainTimeout = setTimeout(() => {
         try {
           const winMsg = buildGameWonMessage(totalScore, this.frame);
           this.broadcastToClients(winMsg);
         } finally {
           this.stage_transitioning = false;
+          this._stageTransitionPending = false;
         }
       }, 1000);
+      this.stageTransitionTimeouts.push(mainTimeout);
       const safetyTimeout = setTimeout(() => {
         if (this.stage_transitioning) {
           console.error('[STAGE_TRANSITION_TIMEOUT] Force clearing stage_transitioning flag');
           this.stage_transitioning = false;
+          this._stageTransitionPending = false;
         }
         clearTimeout(mainTimeout);
       }, 5000);
+      this.stageTransitionTimeouts.push(safetyTimeout);
     } else {
-      this.stage_transitioning = true;
       const mainTimeout = setTimeout(() => {
         try {
           this.nextStage();
         } finally {
           this.stage_transitioning = false;
+          this._stageTransitionPending = false;
         }
       }, 3000);
+      this.stageTransitionTimeouts.push(mainTimeout);
       const safetyTimeout = setTimeout(() => {
         if (this.stage_transitioning) {
           console.error('[STAGE_TRANSITION_TIMEOUT] Force clearing stage_transitioning flag');
           this.stage_transitioning = false;
+          this._stageTransitionPending = false;
         }
         clearTimeout(mainTimeout);
       }, 10000);
+      this.stageTransitionTimeouts.push(safetyTimeout);
     }
   }
 
@@ -1028,10 +1062,11 @@ class PhysicsGame {
       this.lastActorState.delete(name);
     }
 
+    const actorSnapshot = Array.from(this.actors.entries());
     const actors = {};
     const currentState = new Map();
     let serializationFailures = 0;
-    for (const [name, actor] of this.actors) {
+    for (const [name, actor] of actorSnapshot) {
       if (actor.state.removed) continue;
       const current = serializeActorState(actor);
       if (!current) {
@@ -1051,14 +1086,14 @@ class PhysicsGame {
     for (const [name, current] of currentState) {
       this.lastActorState.set(name, current);
     }
-    const data = { version, frame: this.frame, stage: this.stage };
+    const data = { version, frame: this._tickFrameSnapshot || this.frame, stage: this.stage };
     if (Object.keys(actors).length > 0) {
       data.actors = actors;
     }
-    if (this.frame % 10 === 0) {
+    if ((this._tickFrameSnapshot || this.frame) % 10 === 0) {
       try {
         let checksum = computeStateChecksum(this.actors);
-        checksum = (checksum + this.frame) >>> 0;
+        checksum = (checksum + (this._tickFrameSnapshot || this.frame)) >>> 0;
         if (checksum === 0) {
           console.warn(`[CHECKSUM] WARNING: Checksum is 0 (all-actors-removed or all-zero-state)`);
         }
@@ -1167,7 +1202,7 @@ class PhysicsGame {
       this.pausedPlayers.delete(playerId);
       this.inputRateLimit.delete(playerId);
       const actor = this.playerActors.get(playerId);
-      if (actor) {
+      if (actor && !actor.state.removed) {
         actor.state.removed = true;
       }
       this.playerActors.delete(playerId);
@@ -1269,14 +1304,22 @@ const getNextPlayerId = () => {
   return ++nextPlayerId;
 };
 const ipRateLimit = new Map();
+const IP_RATE_LIMIT_TTL = 3600000;
 
 const checkIPRateLimit = (ip) => {
   const now = Date.now();
-  const lastRequest = ipRateLimit.get(ip) || 0;
-  if (now - lastRequest < 100) {
+  const entry = ipRateLimit.get(ip);
+  if (entry && now - entry < 100) {
     return false;
   }
   ipRateLimit.set(ip, now);
+  if (ipRateLimit.size > 10000) {
+    for (const [ipAddr, timestamp] of ipRateLimit) {
+      if (now - timestamp > IP_RATE_LIMIT_TTL) {
+        ipRateLimit.delete(ipAddr);
+      }
+    }
+  }
   return true;
 };
 
@@ -1324,16 +1367,17 @@ setInterval(() => {
     game.pendingInput.delete(playerId);
     game.inputRateLimit.delete(playerId);
     const actor = game.playerActors.get(playerId);
-    if (actor) {
+    if (actor && !actor.state.removed) {
       actor.state.removed = true;
     }
     game.playerActors.delete(playerId);
   }
-  const connectedCount = Array.from(game.pausedPlayers).filter(pid => game.clients.has(pid)).length;
+  const pausedSnapshot = Array.from(game.pausedPlayers);
+  const connectedCount = pausedSnapshot.filter(pid => game.clients.has(pid)).length;
   const anyConnectedPaused = connectedCount > 0;
   if (game.paused && !anyConnectedPaused && game.clients.size > 0) {
     game.paused = false;
-    game.broadcastToClients(buildResumeMessage(game.frame));
+    game.broadcastToClients(buildResumeMessage(game._tickFrameSnapshot || game.frame));
   } else if (game.clients.size === 0 && (game.paused || game.pausedPlayers.size > 0)) {
     game.paused = false;
     game.pausedPlayers.clear();
@@ -1436,21 +1480,23 @@ wss.on('connection', (ws) => {
       } else if (action === 'pause') {
         if (game.clients.has(playerId)) {
           game.pausedPlayers.add(playerId);
-          const connectedCount = Array.from(game.pausedPlayers).filter(pid => game.clients.has(pid)).length;
+          const pausedSnapshot = Array.from(game.pausedPlayers);
+          const connectedCount = pausedSnapshot.filter(pid => game.clients.has(pid)).length;
           const allConnectedPaused = connectedCount > 0 && connectedCount === game.clients.size;
           if (allConnectedPaused && !game.paused) {
             game.paused = true;
-            game.broadcastToClients(buildPauseMessage(game.frame));
+            game.broadcastToClients(buildPauseMessage(game._tickFrameSnapshot || game.frame));
           }
         }
       } else if (action === 'resume') {
         if (game.clients.has(playerId)) {
           game.pausedPlayers.delete(playerId);
-          const connectedCount = Array.from(game.pausedPlayers).filter(pid => game.clients.has(pid)).length;
+          const pausedSnapshot = Array.from(game.pausedPlayers);
+          const connectedCount = pausedSnapshot.filter(pid => game.clients.has(pid)).length;
           const anyConnectedPaused = connectedCount > 0;
           if (!anyConnectedPaused && game.clients.size > 0 && game.paused) {
             game.paused = false;
-            game.broadcastToClients(buildResumeMessage(game.frame));
+            game.broadcastToClients(buildResumeMessage(game._tickFrameSnapshot || game.frame));
           }
         }
       }
@@ -1472,15 +1518,17 @@ wss.on('connection', (ws) => {
     game.inputRateLimit.delete(playerId);
     game.pausedPlayers.delete(playerId);
     game.playerActors.delete(playerId);
+    ws.isAlive = undefined;
 
-    const connectedCount = Array.from(game.pausedPlayers).filter(pid => game.clients.has(pid)).length;
+    const pausedSnapshot = Array.from(game.pausedPlayers);
+    const connectedCount = pausedSnapshot.filter(pid => game.clients.has(pid)).length;
     const anyConnectedPaused = connectedCount > 0;
     const noClientsRemain = game.clients.size === 0;
     if (game.paused && !anyConnectedPaused && (game.clients.size > 0 || noClientsRemain)) {
       game.paused = false;
       game.pausedPlayers.clear();
       if (game.clients.size > 0) {
-        game.broadcastToClients(buildResumeMessage(game.frame));
+        game.broadcastToClients(buildResumeMessage(game._tickFrameSnapshot || game.frame));
       }
     }
   });
@@ -1693,15 +1741,24 @@ app.get('/api/level/:num', (req, res) => {
   if (!checkIPRateLimit(ip)) {
     return res.status(429).json({ error: 'Rate limit exceeded' });
   }
-  const num = parseInt(req.params.num);
-  if (isNaN(num) || num < 1 || num > 4) return res.status(400).json({ error: 'Invalid stage' });
+  const numStr = req.params.num.trim();
+  const num = Number.parseInt(numStr, 10);
+  if (!Number.isInteger(num) || num < 1 || num > 4) {
+    return res.status(400).json({ error: 'Invalid stage number (1-4)' });
+  }
   const filePath = path.join(__dirname, '..', 'game', `levels/stage${num}.json`);
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Level not found' });
   try {
     const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (!data || typeof data !== 'object' || !Array.isArray(data.platforms) || !Array.isArray(data.enemies)) {
+      return res.status(500).json({ error: 'Level missing required fields (platforms, enemies)' });
+    }
+    if (!data.goal || typeof data.goal.x !== 'number' || typeof data.goal.y !== 'number') {
+      return res.status(500).json({ error: 'Level missing goal position' });
+    }
     res.json(data);
   } catch (e) {
-    res.status(500).json({ error: 'Invalid level format' });
+    res.status(500).json({ error: `Invalid level format: ${e.message}` });
   }
 });
 
@@ -1712,26 +1769,33 @@ app.get('/api/stats', (req, res) => {
   }
   const players = Array.from(game.playerActors.values())
     .filter(p => !p.state.removed)
-    .map(p => ({
-      id: p.state.player_id,
-      score: p.state.score,
-      lives: p.state.lives,
-      deaths: p.state.deaths,
-      stage_time: Math.round(p.state.stage_time * 10) / 10,
-      x: Math.round(p.body.position.x),
-      y: Math.round(p.body.position.y),
-      vx: Math.round(p.body.velocity.x),
-      vy: Math.round(p.body.velocity.y),
-      respawning: p.state.respawn_time > 0
-    }));
+    .map(p => {
+      if (!p.body || !isFinite(p.body.position.x) || !isFinite(p.body.position.y)) {
+        console.error(`[STATS] Invalid player position: ${p.state.player_id}`);
+        return null;
+      }
+      return {
+        id: p.state.player_id,
+        score: p.state.score || 0,
+        lives: p.state.lives || 0,
+        deaths: p.state.deaths || 0,
+        stage_time: Math.round((p.state.stage_time || 0) * 10) / 10,
+        x: Math.round(p.body.position.x),
+        y: Math.round(p.body.position.y),
+        vx: Math.round(p.body.velocity.x),
+        vy: Math.round(p.body.velocity.y),
+        respawning: p.state.respawn_time > 0
+      };
+    })
+    .filter(Boolean);
 
   const platforms = Array.from(game.actors.values())
-    .filter(a => !a.state.removed && a.type.includes('platform'))
+    .filter(a => !a.state.removed && (a.type === 'platform' || a.type === 'breakable_platform'))
     .map(p => {
       const obj = { name: p.name, type: p.type };
       if (p.type === 'breakable_platform') {
-        obj.hits = p.state.hit_count;
-        obj.max_hits = p.state.max_hits;
+        obj.hits = p.state.hit_count || 0;
+        obj.max_hits = p.state.max_hits || 3;
       }
       return obj;
     });
@@ -1751,32 +1815,52 @@ app.get('/api/stats', (req, res) => {
 });
 
 app.get('/api/frame/:num', (req, res) => {
+  const ip = req.ip || req.connection.remoteAddress;
+  if (!checkIPRateLimit(ip)) {
+    return res.status(429).json({ error: 'Rate limit exceeded' });
+  }
+  const snapshot = Array.from(game.actors.values())
+    .filter(a => !a.state.removed)
+    .map(a => {
+      if (!a.body || !isFinite(a.body.position.x) || !isFinite(a.body.position.y) ||
+          !isFinite(a.body.velocity.x) || !isFinite(a.body.velocity.y)) {
+        console.error(`[FRAME] Invalid actor position/velocity: ${a.name}`);
+        return null;
+      }
+      let state = {};
+      if (a.type === 'player') {
+        state = { lives: a.state.lives || 0, score: a.state.score || 0, respawn_time: a.state.respawn_time || 0, on_ground: a.state.on_ground ? 1 : 0 };
+      } else if (a.type === 'enemy') {
+        state = { on_ground: a.state.on_ground ? 1 : 0 };
+      } else if (a.type === 'breakable_platform') {
+        state = { hit_count: a.state.hit_count || 0 };
+      } else if (a.type === 'platform') {
+        state = { width: a.state.width || 32 };
+      }
+      return { name: a.name, type: a.type, pos: [a.body.position.x, a.body.position.y], vel: [a.body.velocity.x, a.body.velocity.y], state };
+    })
+    .filter(Boolean);
   res.json({
     frame: game.frame,
     stage: game.stage,
-    snapshot: Array.from(game.actors.values())
-      .filter(a => !a.state.removed)
-      .map(a => {
-        let state = {};
-        if (a.type === 'player') {
-          state = { lives: a.state.lives, score: a.state.score, respawn_time: a.state.respawn_time, on_ground: a.state.on_ground };
-        } else if (a.type === 'enemy') {
-          state = { on_ground: a.state.on_ground };
-        } else if (a.type === 'breakable_platform') {
-          state = { hit_count: a.state.hit_count };
-        } else if (a.type === 'platform') {
-          state = { width: a.state.width };
-        }
-        return { name: a.name, type: a.type, pos: [a.body.position.x, a.body.position.y], vel: [a.body.velocity.x, a.body.velocity.y], state };
-      })
+    snapshot
   });
+});
+
+app.get('/health', (req, res) => {
+  const isHealthy = !game.paused && game.frame > 0 && game.clients.size >= 0;
+  if (isHealthy) {
+    res.status(200).json({ status: 'healthy', frame: game.frame, stage: game.stage, clients: game.clients.size });
+  } else {
+    res.status(503).json({ status: 'unhealthy', reason: game.paused ? 'paused' : 'no_frames' });
+  }
 });
 
 let tickCount = 0;
 let frameTimes = [];
 const MAX_FRAME_HISTORY = 60;
 
-setInterval(() => {
+let tickInterval = setInterval(() => {
   const tickStart = Date.now();
   try {
     game.tick();
@@ -1786,11 +1870,19 @@ setInterval(() => {
     game.paused = true;
     game.pendingInput.clear();
     game.heldInput.clear();
-    game.broadcastToClients([MSG_TYPES.UPDATE, { error: 'Game tick error' }]);
+    try {
+      game.broadcastToClients([MSG_TYPES.UPDATE, { error: 'Game tick error' }]);
+    } catch (be) {
+      console.error(`[TICK_CRASH_BROADCAST] Failed to notify clients: ${be.message}`);
+    }
     return;
   }
 
   try {
+    if (updateVersion >= 2147483647) {
+      console.error('[VERSION_OVERFLOW] Update version overflow, resetting to 0');
+      updateVersion = 0;
+    }
     updateVersion++;
     game.broadcastStateUpdate(updateVersion);
     tickCount++;
@@ -1802,16 +1894,15 @@ setInterval(() => {
     }
 
     if (tickCount % 300 === 0) {
-      const avgTime = frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length;
-      const maxTime = Math.max(...frameTimes);
+      const avgTime = frameTimes.length > 0 ? frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length : 0;
+      const maxTime = frameTimes.length > 0 ? Math.max(...frameTimes) : 0;
       const fps = 1000 / TICK_MS;
       const health = avgTime < TICK_MS * 0.8 ? '✓' : avgTime < TICK_MS ? '⚠' : '✗';
-      console.error(`[PERF] Frame ${game.frame} | ${health} Avg: ${avgTime.toFixed(1)}ms Max: ${maxTime}ms FPS: ${fps} | Clients: ${game.clients.size} Actors: ${game.actors.size}`);
+      console.log(`[PERF] Frame ${game.frame} | ${health} Avg: ${avgTime.toFixed(1)}ms Max: ${maxTime}ms FPS: ${fps} | Clients: ${game.clients.size} Actors: ${game.actors.size}`);
     }
   } catch (e) {
     console.error(`[BROADCAST_CRASH] Frame ${game.frame}: ${e.message}`);
     console.error(e.stack);
-    game.frame++;
   }
 }, TICK_MS);
 
@@ -1820,21 +1911,40 @@ app.get('/api/perf', (req, res) => {
   if (!checkIPRateLimit(ip)) {
     return res.status(429).json({ error: 'Rate limit exceeded' });
   }
-  const avgTime = frameTimes.length > 0 ? frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length : 0;
-  const maxTime = frameTimes.length > 0 ? Math.max(...frameTimes) : 0;
-  const minTime = frameTimes.length > 0 ? Math.min(...frameTimes) : 0;
+  let avgTime = 0, maxTime = 0, minTime = 0;
+  if (frameTimes.length > 0) {
+    avgTime = frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length;
+    maxTime = Math.max(...frameTimes);
+    minTime = Math.min(...frameTimes);
+    if (!isFinite(avgTime)) avgTime = 0;
+    if (!isFinite(maxTime)) maxTime = 0;
+    if (!isFinite(minTime)) minTime = 0;
+  }
+  const uptimeSeconds = Math.floor((tickCount * TICK_MS) / 1000);
   res.json({
     frame: game.frame,
-    fps: 1000 / TICK_MS,
-    avgFrameMs: avgTime,
-    maxFrameMs: maxTime,
-    minFrameMs: minTime,
+    fps: Math.round(1000 / TICK_MS),
+    avgFrameMs: Math.round(avgTime * 10) / 10,
+    maxFrameMs: Math.round(maxTime),
+    minFrameMs: Math.round(minTime),
     tickMs: TICK_MS,
-    uptime: Math.floor(tickCount / 60) + 's'
+    uptimeSeconds,
+    healthStatus: !game.paused ? 'running' : 'paused'
   });
 });
-process.on('SIGTERM', () => {
-  console.error('[SHUTDOWN] Received SIGTERM, closing server gracefully');
+const gracefulShutdown = (signal) => {
+  console.error(`[SHUTDOWN] Received ${signal}, closing server gracefully`);
+  clearInterval(tickInterval);
+  game.clearStageTransitionTimeouts();
+  game.clients.forEach((client, playerId) => {
+    try {
+      if (client && client.ws) {
+        client.ws.close(1001, 'Server shutting down');
+      }
+    } catch (e) {
+      console.error(`[SHUTDOWN_ERROR] Failed to close client ${playerId}: ${e.message}`);
+    }
+  });
   server.close(() => {
     console.error('[SHUTDOWN] Server closed');
     process.exit(0);
@@ -1843,19 +1953,10 @@ process.on('SIGTERM', () => {
     console.error('[SHUTDOWN] Force exit due to timeout');
     process.exit(1);
   }, 5000);
-});
+};
 
-process.on('SIGINT', () => {
-  console.error('[SHUTDOWN] Received SIGINT, closing server gracefully');
-  server.close(() => {
-    console.error('[SHUTDOWN] Server closed');
-    process.exit(0);
-  });
-  setTimeout(() => {
-    console.error('[SHUTDOWN] Force exit due to timeout');
-    process.exit(1);
-  }, 5000);
-});
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 server.listen(PORT, () => {
   console.log(`Server listening on port ${PORT}`);
