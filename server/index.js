@@ -283,26 +283,47 @@ class PhysicsGame {
     this.stage = stageNum;
     this.clearStageTransitionTimeouts();
     const savedPlayers = new Map();
-    for (const [playerId, actor] of this.playerActors) {
-      if (actor.state.removed) continue;
-      savedPlayers.set(playerId, {
-        player_id: playerId,
-        lives: actor.state.lives,
-        score: actor.state.score,
-        deaths: actor.state.deaths,
-        stage_time: actor.state.stage_time
-      });
+    try {
+      for (const [playerId, actor] of this.playerActors) {
+        if (!actor || actor.state.removed) continue;
+        if (typeof actor.state.lives !== 'number') actor.state.lives = 3;
+        if (typeof actor.state.score !== 'number') actor.state.score = 0;
+        if (typeof actor.state.deaths !== 'number') actor.state.deaths = 0;
+        if (typeof actor.state.stage_time !== 'number') actor.state.stage_time = 0;
+        savedPlayers.set(playerId, {
+          player_id: playerId,
+          lives: actor.state.lives,
+          score: actor.state.score,
+          deaths: actor.state.deaths,
+          stage_time: actor.state.stage_time
+        });
+      }
+    } catch (e) {
+      console.error(`[LOAD_SAVE_PLAYERS] Stage ${stageNum}: ${e.message}`);
+      savedPlayers.clear();
     }
-    this.actors.clear();
-    this.playerActors.clear();
-    this.bodies.forEach(b => World.remove(this.engine.world, b));
-    this.bodies.clear();
-    this.lastActorState.clear();
-    this.pausedPlayers.clear();
-    this.frame = 0;
-    this.stage_over = false;
-    this.stage_over_time = 0;
-    this.level = null;
+
+    try {
+      this.actors.clear();
+      this.playerActors.clear();
+      const bodiesToRemove = Array.from(this.bodies.values());
+      for (const b of bodiesToRemove) {
+        try {
+          World.remove(this.engine.world, b);
+        } catch (e) {
+          console.error(`[LOAD_BODY_REMOVE] Failed to remove body: ${e.message}`);
+        }
+      }
+      this.bodies.clear();
+      this.lastActorState.clear();
+      this.pausedPlayers.clear();
+      this.frame = 0;
+      this.stage_over = false;
+      this.stage_over_time = 0;
+      this.level = null;
+    } catch (e) {
+      console.error(`[LOAD_CLEAR] Stage ${stageNum}: ${e.message}`);
+    }
 
     const levelPath = `levels/stage${stageNum}.json`;
     try {
@@ -319,8 +340,8 @@ class PhysicsGame {
         throw new Error(`Invalid level goal: ${JSON.stringify(this.level.goal)}`);
       }
     } catch (e) {
-      console.error(`Failed to load stage ${stageNum}:`, e.message);
-      this.level = { name: 'Error', platforms: [], enemies: [], goal: null };
+      console.error(`[LOAD_FILE] Failed to load stage ${stageNum}: ${e.message}`);
+      this.level = { name: 'Error', platforms: [], enemies: [], goal: { x: 640, y: 360 } };
     }
 
     const MAX_PLATFORMS = 1000;
@@ -329,52 +350,89 @@ class PhysicsGame {
     if (Array.isArray(this.level.platforms)) {
       for (const p of this.level.platforms) {
         if (platformCount >= MAX_PLATFORMS) {
-          console.warn(`[LOAD] Platform limit (${MAX_PLATFORMS}) reached, skipping remaining`);
+          console.warn(`[LOAD] Platform limit (${MAX_PLATFORMS}) reached`);
           break;
         }
-        if (typeof p.x !== 'number' || typeof p.y !== 'number' || p.x < 0 || p.x > 1280 || p.y < 0 || p.y > 720) {
-          console.warn(`[LOAD] Skipping platform with invalid position: ${JSON.stringify(p)}`);
-          continue;
+        try {
+          if (!p || typeof p !== 'object') {
+            console.warn(`[LOAD_PLATFORM] Invalid platform object`);
+            continue;
+          }
+          if (typeof p.x !== 'number' || typeof p.y !== 'number' || !isFinite(p.x) || !isFinite(p.y) ||
+              p.x < 0 || p.x > 1280 || p.y < 0 || p.y > 720) {
+            console.warn(`[LOAD_PLATFORM] Invalid position: x=${p.x}, y=${p.y}`);
+            continue;
+          }
+          const width = typeof p.width === 'number' && p.width > 0 && p.width <= 256 ? p.width : 32;
+          const max_hits = typeof p.max_hits === 'number' && p.max_hits > 0 ? p.max_hits : 3;
+          const isBreakable = p.breakable === true;
+          const actor = this.spawn(isBreakable ? 'breakable_platform' : 'platform', [p.x, p.y], { max_hits, width });
+          if (actor) platformCount++;
+        } catch (e) {
+          console.error(`[LOAD_PLATFORM] Error: ${e.message}`);
         }
-        const width = typeof p.width === 'number' && p.width > 0 && p.width <= 256 ? p.width : 32;
-        const max_hits = typeof p.max_hits === 'number' && p.max_hits > 0 ? p.max_hits : 3;
-        const isBreakable = p.breakable === true;
-        this.spawn(isBreakable ? 'breakable_platform' : 'platform', [p.x, p.y], { max_hits, width });
-        platformCount++;
       }
     }
+
     let enemyCount = 0;
     if (Array.isArray(this.level.enemies)) {
       for (const e of this.level.enemies) {
         if (enemyCount >= MAX_ENEMIES) {
-          console.warn(`[LOAD] Enemy limit (${MAX_ENEMIES}) reached, skipping remaining`);
+          console.warn(`[LOAD] Enemy limit (${MAX_ENEMIES}) reached`);
           break;
         }
-        if (typeof e.x !== 'number' || typeof e.y !== 'number' || e.x < 0 || e.x > 1280 || e.y < 0 || e.y > 720) {
-          console.warn(`[LOAD] Skipping enemy with invalid position: ${JSON.stringify(e)}`);
-          continue;
+        try {
+          if (!e || typeof e !== 'object') {
+            console.warn(`[LOAD_ENEMY] Invalid enemy object`);
+            continue;
+          }
+          if (typeof e.x !== 'number' || typeof e.y !== 'number' || !isFinite(e.x) || !isFinite(e.y) ||
+              e.x < 0 || e.x > 1280 || e.y < 0 || e.y > 720) {
+            console.warn(`[LOAD_ENEMY] Invalid position: x=${e.x}, y=${e.y}`);
+            continue;
+          }
+          const speed = typeof e.speed === 'number' && e.speed > 0 && e.speed <= 500 ? e.speed : 120;
+          const dir = e.patrol_dir !== undefined ? e.patrol_dir : e.dir;
+          const patrol_dir = typeof dir === 'number' && (dir === 1 || dir === -1) ? dir : -1;
+          const actor = this.spawn('enemy', [e.x, e.y], { speed, patrol_dir });
+          if (actor) enemyCount++;
+        } catch (e) {
+          console.error(`[LOAD_ENEMY] Error: ${e.message}`);
         }
-        const speed = typeof e.speed === 'number' && e.speed > 0 && e.speed <= 500 ? e.speed : 120;
-        const dir = e.patrol_dir !== undefined ? e.patrol_dir : e.dir;
-        const patrol_dir = typeof dir === 'number' && (dir === 1 || dir === -1) ? dir : -1;
-        this.spawn('enemy', [e.x, e.y], { speed, patrol_dir });
-        enemyCount++;
       }
     }
 
-    for (const [playerId, playerState] of savedPlayers) {
-      const spawnPos = this.getSpawnPosition(playerId);
-      const playerSpawnExtra = {
-        player_id: playerId,
-        lives: Math.max(0, playerState.lives || 3),
-        score: Math.max(0, playerState.score || 0),
-        deaths: Math.max(0, playerState.deaths || 0),
-        stage_time: Math.max(0, playerState.stage_time || 0)
-      };
-      this.spawn('player', spawnPos, playerSpawnExtra);
+    try {
+      for (const [playerId, playerState] of savedPlayers) {
+        try {
+          const spawnPos = this.getSpawnPosition(playerId);
+          if (!spawnPos || !Array.isArray(spawnPos) || spawnPos.length < 2 ||
+              typeof spawnPos[0] !== 'number' || typeof spawnPos[1] !== 'number') {
+            console.error(`[LOAD_PLAYER] Invalid spawn position for player ${playerId}`);
+            continue;
+          }
+          const playerSpawnExtra = {
+            player_id: playerId,
+            lives: Math.max(0, playerState.lives || 3),
+            score: Math.max(0, playerState.score || 0),
+            deaths: Math.max(0, playerState.deaths || 0),
+            stage_time: Math.max(0, playerState.stage_time || 0)
+          };
+          this.spawn('player', spawnPos, playerSpawnExtra);
+        } catch (e) {
+          console.error(`[LOAD_PLAYER] Error for player ${playerId}: ${e.message}`);
+        }
+      }
+    } catch (e) {
+      console.error(`[LOAD_PLAYERS] Error: ${e.message}`);
     }
-    this.pendingInput.clear();
-    this.heldInput.clear();
+
+    try {
+      this.pendingInput.clear();
+      this.heldInput.clear();
+    } catch (e) {
+      console.error(`[LOAD_INPUT_CLEAR] Error: ${e.message}`);
+    }
     this.loading = false;
   }
 
@@ -475,42 +533,109 @@ class PhysicsGame {
   tick() {
     const wasPaused = this.paused;
     if (!wasPaused) {
-      this.frame++;
-      if (this.frame > 2147483647) {
-        console.error(`[FRAME_OVERFLOW] Frame counter reset at ${this.frame}`);
+      if (this.frame >= 2147483647) {
+        console.error(`[FRAME_OVERFLOW] Frame ${this.frame} would overflow, resetting to 0`);
         this.frame = 0;
       }
+      this.frame++;
       const frameSnapshot = this.frame;
 
-      this.processPendingInput();
-      this.updateRespawns();
-      this.updateActors();
+      try {
+        this.processPendingInput();
+      } catch (e) {
+        console.error(`[TICK_INPUT_ERROR] Frame ${frameSnapshot}: ${e.message}`);
+        this.pendingInput.clear();
+        this.heldInput.clear();
+      }
 
-      const actorSnapshot = Array.from(this.actors.entries());
-      for (const [name, actor] of actorSnapshot) {
-        if (!actor.body || actor.state.removed) continue;
-        actor.body._prevPos = { x: actor.body.position.x, y: actor.body.position.y };
+      try {
+        this.updateRespawns();
+      } catch (e) {
+        console.error(`[TICK_RESPAWN_ERROR] Frame ${frameSnapshot}: ${e.message}`);
+      }
+
+      try {
+        this.updateActors();
+      } catch (e) {
+        console.error(`[TICK_UPDATE_ERROR] Frame ${frameSnapshot}: ${e.message}`);
+      }
+
+      let actorSnapshot = [];
+      try {
+        actorSnapshot = Array.from(this.actors.entries());
+      } catch (e) {
+        console.error(`[TICK_SNAPSHOT_ERROR] Frame ${frameSnapshot}: ${e.message}`);
+        actorSnapshot = [];
       }
 
       for (const [name, actor] of actorSnapshot) {
-        if (!actor.body || actor.state.removed) continue;
-        actor.body.position.x += actor.body.velocity.x * (TICK_MS / 1000);
-        actor.body.position.y += actor.body.velocity.y * (TICK_MS / 1000);
-        if (!isFinite(actor.body.position.x) || !isFinite(actor.body.position.y) ||
-            actor.body.position.x < -1000 || actor.body.position.x > 2280 ||
-            actor.body.position.y < -1000 || actor.body.position.y > 1720) {
-          console.error(`[BOUNDS] Actor ${name} out of bounds: ${actor.body.position.x}, ${actor.body.position.y}`);
+        if (!actor || !actor.body || actor.state.removed) continue;
+        if (actor.body._prevPos) {
+          actor.body._prevPos.x = actor.body.position.x;
+          actor.body._prevPos.y = actor.body.position.y;
+        } else {
+          actor.body._prevPos = { x: actor.body.position.x, y: actor.body.position.y };
+        }
+      }
+
+      for (const [name, actor] of actorSnapshot) {
+        if (!actor || !actor.body || actor.state.removed) continue;
+        try {
+          const vx = actor.body.velocity.x;
+          const vy = actor.body.velocity.y;
+          if (!isFinite(vx) || !isFinite(vy)) {
+            console.error(`[NAN_VELOCITY] Actor ${name} has NaN velocity: ${vx}, ${vy}`);
+            actor.state.removed = true;
+            continue;
+          }
+          const newX = actor.body.position.x + vx * (TICK_MS / 1000);
+          const newY = actor.body.position.y + vy * (TICK_MS / 1000);
+          if (!isFinite(newX) || !isFinite(newY)) {
+            console.error(`[NAN_POSITION] Actor ${name} position would be NaN: ${newX}, ${newY}`);
+            actor.state.removed = true;
+            continue;
+          }
+          actor.body.position.x = newX;
+          actor.body.position.y = newY;
+          if (actor.body.position.x < -1000 || actor.body.position.x > 2280 ||
+              actor.body.position.y < -1000 || actor.body.position.y > 1720) {
+            console.error(`[BOUNDS] Actor ${name} out of bounds: ${actor.body.position.x}, ${actor.body.position.y}`);
+            actor.state.removed = true;
+          }
+        } catch (e) {
+          console.error(`[TICK_PHYSICS_ERROR] Actor ${name}: ${e.message}`);
           actor.state.removed = true;
         }
       }
 
-      this.checkCollisions(actorSnapshot);
-      this.checkGoal(frameSnapshot);
-      this.updateGameState(frameSnapshot);
+      try {
+        this.checkCollisions(actorSnapshot);
+      } catch (e) {
+        console.error(`[TICK_COLLISION_ERROR] Frame ${frameSnapshot}: ${e.message}`);
+      }
+
+      try {
+        if (!this.paused) {
+          this.checkGoal(frameSnapshot);
+        }
+      } catch (e) {
+        console.error(`[TICK_GOAL_ERROR] Frame ${frameSnapshot}: ${e.message}`);
+      }
+
+      try {
+        this.updateGameState(frameSnapshot);
+      } catch (e) {
+        console.error(`[TICK_GAMESTATE_ERROR] Frame ${frameSnapshot}: ${e.message}`);
+      }
+
       this._tickFrameSnapshot = frameSnapshot;
     }
 
-    this.removeDeadActors();
+    try {
+      this.removeDeadActors();
+    } catch (e) {
+      console.error(`[TICK_CLEANUP_ERROR] Frame ${this.frame}: ${e.message}`);
+    }
   }
 
   processPendingInput() {
@@ -650,25 +775,48 @@ class PhysicsGame {
 
       if (actor.state.respawn_time > 0) {
         actor.state.respawn_time = Math.max(0, actor.state.respawn_time - tickSeconds);
-        game.heldInput.delete(actor.state.player_id);
+        try {
+          game.heldInput.delete(actor.state.player_id);
+        } catch (e) {
+          console.error(`[RESPAWN_INPUT_CLEANUP] Player ${actor.state.player_id}: ${e.message}`);
+        }
 
         if (actor.state.respawn_time <= 0) {
-          const spawnPos = this.getSpawnPosition(actor.state.player_id);
-          if (!spawnPos || !Array.isArray(spawnPos) || spawnPos.length !== 2) {
-            console.error(`[RESPAWN] Invalid spawn position for player ${actor.state.player_id}, using fallback`);
-            spawnPos[0] = 640; spawnPos[1] = 100;
+          try {
+            let spawnPos = this.getSpawnPosition(actor.state.player_id);
+            if (!spawnPos || !Array.isArray(spawnPos) || spawnPos.length < 2 ||
+                typeof spawnPos[0] !== 'number' || typeof spawnPos[1] !== 'number') {
+              console.error(`[RESPAWN] Invalid spawn position type, using fallback`);
+              spawnPos = [640, 100];
+            }
+            if (!isFinite(spawnPos[0]) || !isFinite(spawnPos[1])) {
+              console.error(`[RESPAWN] Spawn position NaN, using fallback`);
+              spawnPos = [640, 100];
+            }
+            if (!actor.body) {
+              console.error(`[RESPAWN] Actor body missing, skipping respawn`);
+            } else {
+              actor.body.position.x = spawnPos[0];
+              actor.body.position.y = spawnPos[1];
+              if (actor.body._prevPos) {
+                actor.body._prevPos.x = spawnPos[0];
+                actor.body._prevPos.y = spawnPos[1];
+              } else {
+                actor.body._prevPos = { x: spawnPos[0], y: spawnPos[1] };
+              }
+              actor.body.velocity.x = 0;
+              actor.body.velocity.y = 0;
+              actor.state.respawn_time = 0;
+              actor.state.on_ground = true;
+              actor.state._coyote_counter = 0;
+              actor.state._goal_reached = false;
+              actor.state.invulnerable = PHYSICS.INVULNERABILITY_TIME;
+              console.log(`[RESPAWN] Player ${actor.state.player_id} respawned at [${spawnPos[0]}, ${spawnPos[1]}]`);
+            }
+          } catch (e) {
+            console.error(`[RESPAWN_ERROR] Player ${actor.state.player_id}: ${e.message}`);
+            actor.state.respawn_time = 0;
           }
-          actor.body.position.x = spawnPos[0];
-          actor.body.position.y = spawnPos[1];
-          actor.body._prevPos = { x: spawnPos[0], y: spawnPos[1] };
-          actor.body.velocity.x = 0;
-          actor.body.velocity.y = 0;
-          actor.state.respawn_time = 0;
-          actor.state.on_ground = true;
-          actor.state._coyote_counter = 0;
-          actor.state._goal_reached = false;
-          actor.state.invulnerable = PHYSICS.INVULNERABILITY_TIME;
-          console.log(`[RESPAWN] Player ${actor.state.player_id} respawned at [${spawnPos[0]}, ${spawnPos[1]}]`);
         }
       }
 
@@ -723,6 +871,8 @@ class PhysicsGame {
           if (actor.state._coyote_counter < 6) {
             actor.state._coyote_counter++;
           }
+        } else if (actor.body.velocity.y === 0 && actor.body.position.y < 700) {
+          actor.body.velocity.y = 20;
         }
         if (!isFinite(actor.body.velocity.x) || !isFinite(actor.body.velocity.y)) {
           console.error(`[NAN] Actor ${name} has invalid velocity: ${actor.body.velocity.x}, ${actor.body.velocity.y}`);
@@ -838,12 +988,18 @@ class PhysicsGame {
                   movingActor.state._landed_this_frame = true;
                 }
 
-                if (!contactingPlatforms.has(movingActor.name)) {
-                  contactingPlatforms.set(movingActor.name, []);
-                }
-                const contactList = contactingPlatforms.get(movingActor.name);
-                if (contactList) {
-                  contactList.push(platformActor.name);
+                try {
+                  if (!contactingPlatforms.has(movingActor.name)) {
+                    contactingPlatforms.set(movingActor.name, []);
+                  }
+                  const contactList = contactingPlatforms.get(movingActor.name);
+                  if (contactList && Array.isArray(contactList)) {
+                    contactList.push(platformActor.name);
+                  } else {
+                    console.error(`[COLLISION] contactList invalid for ${movingActor.name}`);
+                  }
+                } catch (e) {
+                  console.error(`[COLLISION_CONTACT] Error: ${e.message}`);
                 }
 
                 if (platformActor.type === 'breakable_platform' && !platformActor.state.removed) {
@@ -916,6 +1072,7 @@ class PhysicsGame {
   }
 
   checkGoal(frameSnapshot) {
+    if (this.stage_transitioning) return;
     if (!this.level.goal || typeof this.level.goal.x !== 'number' || typeof this.level.goal.y !== 'number') return;
     for (const [playerId, actor] of this.playerActors) {
       if (!actor.state._goal_reached && !actor.state.removed && actor.body && actor.state.respawn_time <= 0) {
@@ -930,67 +1087,118 @@ class PhysicsGame {
 
   removeDeadActors() {
     const toRemove = [];
-    for (const [name, actor] of this.actors) {
-      if (actor.state.removed) {
-        toRemove.push(name);
+    try {
+      for (const [name, actor] of this.actors) {
+        if (actor && actor.state && actor.state.removed) {
+          toRemove.push(name);
+        }
       }
+    } catch (e) {
+      console.error(`[REMOVE_SCAN] Error: ${e.message}`);
+      return;
     }
+
     for (const name of toRemove) {
-      const actor = this.actors.get(name);
-      if (actor.type === 'player') {
-        const playerId = actor.state.player_id;
-        console.error(`[REMOVE] Removing player ${playerId} (${name})`);
-        this.playerActors.delete(playerId);
-        this.pendingInput.delete(playerId);
-        this.heldInput.delete(playerId);
-        this.inputRateLimit.delete(playerId);
+      try {
+        const actor = this.actors.get(name);
+        if (!actor) {
+          console.warn(`[REMOVE] Actor ${name} already removed`);
+          continue;
+        }
+
+        if (actor.type === 'player') {
+          const playerId = actor.state.player_id;
+          console.error(`[REMOVE] Removing player ${playerId}`);
+          try {
+            this.playerActors.delete(playerId);
+            this.pendingInput.delete(playerId);
+            this.heldInput.delete(playerId);
+            this.inputRateLimit.delete(playerId);
+          } catch (e) {
+            console.error(`[REMOVE_PLAYER_MAPS] ${playerId}: ${e.message}`);
+          }
+        }
+
+        try {
+          if (actor.state._hit_this_frame && typeof actor.state._hit_this_frame.clear === 'function') {
+            actor.state._hit_this_frame.clear();
+          }
+          actor.state._hit_this_frame = null;
+        } catch (e) {
+          console.error(`[REMOVE_HIT_FRAME] ${name}: ${e.message}`);
+        }
+
+        try {
+          if (actor.body && actor.body._prevPos) {
+            actor.body._prevPos = null;
+          }
+          if (actor.body) {
+            World.remove(this.engine.world, actor.body);
+          }
+        } catch (e) {
+          console.error(`[REMOVE_WORLD] ${name}: ${e.message}`);
+        }
+
+        this.actors.delete(name);
+        this.bodies.delete(name);
+        this.lastActorState.delete(name);
+      } catch (e) {
+        console.error(`[REMOVE_ACTOR] ${name}: ${e.message}`);
       }
-      if (actor.state._hit_this_frame && typeof actor.state._hit_this_frame.clear === 'function') {
-        actor.state._hit_this_frame.clear();
-      }
-      actor.state._hit_this_frame = null;
-      if (actor.body && actor.body._prevPos) {
-        actor.body._prevPos = null;
-      }
-      World.remove(this.engine.world, actor.body);
-      this.actors.delete(name);
-      this.bodies.delete(name);
-      this.lastActorState.delete(name);
     }
   }
 
   updateGameState(frameSnapshot) {
-    const activePlayers = Array.from(this.actors.values())
-      .filter(a => a.type === 'player' && a.state.lives > 0 && a.state.respawn_time <= 0);
+    try {
+      const activePlayers = Array.from(this.actors.values())
+        .filter(a => a && a.type === 'player' && a.state && a.state.lives > 0 && a.state.respawn_time <= 0);
 
-    if (activePlayers.length === 0) {
-      const connectedPlayers = Array.from(this.actors.values())
-        .filter(a => a.type === 'player' && !a.state.removed && this.clients.has(a.state.player_id));
-      if (connectedPlayers.length > 0) {
-        if (!this.stage_over) {
-          this.stage_over = true;
-          this.stage_over_time = Date.now();
-          console.error(`[GAMEOVER] All players eliminated at frame ${frameSnapshot}`);
+      if (activePlayers.length === 0) {
+        try {
+          const connectedPlayers = Array.from(this.actors.values())
+            .filter(a => a && a.type === 'player' && !a.state.removed && this.clients.has(a.state.player_id));
+          if (connectedPlayers.length > 0) {
+            if (!this.stage_over) {
+              this.stage_over = true;
+              this.stage_over_time = Date.now();
+              console.error(`[GAMEOVER] All players eliminated at frame ${frameSnapshot}`);
+            }
+          }
+        } catch (e) {
+          console.error(`[GAMESTATE_ACTIVE] Error: ${e.message}`);
         }
       }
-    }
 
-    if (this.stage_over && !this.stage_transitioning) {
-      const elapsed = Math.max(0, Date.now() - this.stage_over_time);
-      if (elapsed >= 3000) {
-        console.error(`[RESTART] Reloading stage ${this.stage} after 3 seconds`);
-        this.stage_transitioning = true;
+      if (this.stage_over && !this.stage_transitioning) {
         try {
-          this.loadStage(this.stage);
-          this.stage_over = false;
-          this.nextStageClients();
+          const now = Date.now();
+          if (typeof this.stage_over_time !== 'number' || !isFinite(this.stage_over_time)) {
+            console.error(`[GAMESTATE] Invalid stage_over_time, resetting`);
+            this.stage_over = false;
+            return;
+          }
+          const elapsed = Math.max(0, now - this.stage_over_time);
+          if (elapsed >= 3000) {
+            console.error(`[RESTART] Reloading stage ${this.stage}`);
+            this.stage_transitioning = true;
+            try {
+              this.loadStage(this.stage);
+              this.stage_over = false;
+              this.nextStageClients();
+            } catch (e) {
+              console.error(`[RESTART_ERROR] Failed to reload: ${e.message}`);
+              this.stage_over = false;
+            } finally {
+              this.stage_transitioning = false;
+            }
+          }
         } catch (e) {
-          console.error(`[RESTART_ERROR] Failed to reload stage: ${e.message}`);
-          this.stage_over = false;
-        } finally {
+          console.error(`[GAMESTATE_TRANSITION] Error: ${e.message}`);
           this.stage_transitioning = false;
         }
       }
+    } catch (e) {
+      console.error(`[GAMESTATE] Error: ${e.message}`);
     }
   }
 
@@ -1051,59 +1259,88 @@ class PhysicsGame {
   }
 
   broadcastStateUpdate(version) {
-    const toDelete = [];
-    for (const [name] of this.lastActorState) {
-      const actor = this.actors.get(name);
-      if (!actor || actor.state.removed) {
-        toDelete.push(name);
+    let toDelete = [];
+    try {
+      for (const [name] of this.lastActorState) {
+        const actor = this.actors.get(name);
+        if (!actor || actor.state.removed) {
+          toDelete.push(name);
+        }
       }
-    }
-    for (const name of toDelete) {
-      this.lastActorState.delete(name);
+      for (const name of toDelete) {
+        this.lastActorState.delete(name);
+      }
+    } catch (e) {
+      console.error(`[BROADCAST_CLEANUP] Error: ${e.message}`);
+      toDelete = [];
     }
 
-    const actorSnapshot = Array.from(this.actors.entries());
+    let actorSnapshot = [];
+    try {
+      actorSnapshot = Array.from(this.actors.entries());
+    } catch (e) {
+      console.error(`[BROADCAST_SNAPSHOT] Error: ${e.message}`);
+      actorSnapshot = [];
+    }
+
     const actors = {};
     const currentState = new Map();
     let serializationFailures = 0;
     for (const [name, actor] of actorSnapshot) {
-      if (actor.state.removed) continue;
-      const current = serializeActorState(actor);
-      if (!current) {
+      try {
+        if (!actor || actor.state.removed) continue;
+        const current = serializeActorState(actor);
+        if (!current) {
+          serializationFailures++;
+          continue;
+        }
+        currentState.set(name, current);
+        const lastState = this.lastActorState.get(name);
+        const delta = lastState ? this._computeDelta(current, lastState) : current;
+        if (delta) {
+          actors[name] = delta;
+        }
+      } catch (e) {
+        console.error(`[BROADCAST_SERIALIZE] Actor ${name}: ${e.message}`);
         serializationFailures++;
-        continue;
-      }
-      currentState.set(name, current);
-      const lastState = this.lastActorState.get(name);
-      const delta = lastState ? this._computeDelta(current, lastState) : current;
-      if (delta) {
-        actors[name] = delta;
       }
     }
     if (serializationFailures > 0) {
-      console.error(`[CHECKSUM_RISK] ${serializationFailures} actors failed serialization, checksum may be unreliable`);
+      console.error(`[BROADCAST_RISK] ${serializationFailures} actors failed serialization`);
     }
-    for (const [name, current] of currentState) {
-      this.lastActorState.set(name, current);
+
+    try {
+      for (const [name, current] of currentState) {
+        this.lastActorState.set(name, current);
+      }
+    } catch (e) {
+      console.error(`[BROADCAST_CACHE] Failed to update cache: ${e.message}`);
     }
+
     const data = { version, frame: this._tickFrameSnapshot || this.frame, stage: this.stage };
     if (Object.keys(actors).length > 0) {
       data.actors = actors;
     }
+
     if ((this._tickFrameSnapshot || this.frame) % 10 === 0) {
       try {
         let checksum = computeStateChecksum(this.actors);
         checksum = (checksum + (this._tickFrameSnapshot || this.frame)) >>> 0;
         if (checksum === 0) {
-          console.warn(`[CHECKSUM] WARNING: Checksum is 0 (all-actors-removed or all-zero-state)`);
+          console.warn(`[CHECKSUM] Checksum is 0`);
         }
         data.checksum = checksum;
       } catch (e) {
-        console.error(`[CHECKSUM] Computation failed: ${e.message}`);
+        console.error(`[CHECKSUM] Failed: ${e.message}`);
       }
     }
+
     const msg = [MSG_TYPES.UPDATE, data];
-    this.broadcastToClients(msg);
+    try {
+      this.broadcastToClients(msg);
+    } catch (e) {
+      console.error(`[BROADCAST] Failed: ${e.message}`);
+    }
   }
 
   _computeDelta(current, lastState) {
@@ -1324,17 +1561,29 @@ const checkIPRateLimit = (ip) => {
 };
 
 setInterval(() => {
-  game.clients.forEach((client, playerId) => {
-    if (client && client.ws && client.ws.readyState === WebSocket.OPEN) {
-      client.ws.isAlive = false;
-      client.ws.ping();
-      setTimeout(() => {
-        if (client.ws.isAlive === false) {
-          client.ws.close();
+  try {
+    game.clients.forEach((client, playerId) => {
+      try {
+        if (client && client.ws && client.ws.readyState === WebSocket.OPEN) {
+          client.ws.isAlive = false;
+          client.ws.ping();
+          const timeoutId = setTimeout(() => {
+            try {
+              if (client && client.ws && client.ws.isAlive === false) {
+                client.ws.close();
+              }
+            } catch (e) {
+              console.error(`[PING_TIMEOUT] Failed to close client ${playerId}: ${e.message}`);
+            }
+          }, 5000);
         }
-      }, 5000);
-    }
-  });
+      } catch (e) {
+        console.error(`[PING] Client ${playerId} error: ${e.message}`);
+      }
+    });
+  } catch (e) {
+    console.error(`[PING_INTERVAL] Error: ${e.message}`);
+  }
 }, 30000);
 
 setInterval(() => {
@@ -1348,39 +1597,71 @@ setInterval(() => {
 }, 600000);
 
 setInterval(() => {
-  const now = Date.now();
-  const idleTimeout = 600000;
-  const deadClients = [];
-  game.clients.forEach((client, playerId) => {
-    if (now - client.lastActivity > idleTimeout) {
-      console.error(`[TIMEOUT] Player ${playerId} idle for 10 minutes, closing`);
-      if (client.ws && client.ws.readyState === WebSocket.OPEN) {
-        client.ws.close(1000, 'Idle timeout');
+  try {
+    const now = Date.now();
+    const idleTimeout = 600000;
+    const deadClients = [];
+    try {
+      game.clients.forEach((client, playerId) => {
+        try {
+          if (!client || typeof client.lastActivity !== 'number') {
+            console.warn(`[IDLE] Client ${playerId} has invalid lastActivity`);
+            deadClients.push(playerId);
+            return;
+          }
+          if (now - client.lastActivity > idleTimeout) {
+            console.error(`[TIMEOUT] Player ${playerId} idle, closing`);
+            if (client.ws && client.ws.readyState === WebSocket.OPEN) {
+              try {
+                client.ws.close(1000, 'Idle timeout');
+              } catch (e) {
+                console.error(`[TIMEOUT_CLOSE] Failed to close ${playerId}: ${e.message}`);
+              }
+            }
+            deadClients.push(playerId);
+          }
+        } catch (e) {
+          console.error(`[IDLE] Client ${playerId} error: ${e.message}`);
+          deadClients.push(playerId);
+        }
+      });
+    } catch (e) {
+      console.error(`[IDLE_SCAN] Error: ${e.message}`);
+    }
+
+    for (const playerId of deadClients) {
+      try {
+        game.clients.delete(playerId);
+        game.pausedPlayers.delete(playerId);
+        game.heldInput.delete(playerId);
+        game.pendingInput.delete(playerId);
+        game.inputRateLimit.delete(playerId);
+        const actor = game.playerActors.get(playerId);
+        if (actor && !actor.state.removed) {
+          actor.state.removed = true;
+        }
+        game.playerActors.delete(playerId);
+      } catch (e) {
+        console.error(`[IDLE_CLEANUP] Player ${playerId}: ${e.message}`);
       }
-      deadClients.push(playerId);
     }
-  });
-  for (const playerId of deadClients) {
-    game.clients.delete(playerId);
-    game.pausedPlayers.delete(playerId);
-    game.heldInput.delete(playerId);
-    game.pendingInput.delete(playerId);
-    game.inputRateLimit.delete(playerId);
-    const actor = game.playerActors.get(playerId);
-    if (actor && !actor.state.removed) {
-      actor.state.removed = true;
+
+    try {
+      const pausedSnapshot = Array.from(game.pausedPlayers);
+      const connectedCount = pausedSnapshot.filter(pid => game.clients.has(pid)).length;
+      const anyConnectedPaused = connectedCount > 0;
+      if (game.paused && !anyConnectedPaused && game.clients.size > 0) {
+        game.paused = false;
+        game.broadcastToClients(buildResumeMessage(game._tickFrameSnapshot || game.frame));
+      } else if (game.clients.size === 0 && (game.paused || game.pausedPlayers.size > 0)) {
+        game.paused = false;
+        game.pausedPlayers.clear();
+      }
+    } catch (e) {
+      console.error(`[IDLE_PAUSE] Error: ${e.message}`);
     }
-    game.playerActors.delete(playerId);
-  }
-  const pausedSnapshot = Array.from(game.pausedPlayers);
-  const connectedCount = pausedSnapshot.filter(pid => game.clients.has(pid)).length;
-  const anyConnectedPaused = connectedCount > 0;
-  if (game.paused && !anyConnectedPaused && game.clients.size > 0) {
-    game.paused = false;
-    game.broadcastToClients(buildResumeMessage(game._tickFrameSnapshot || game.frame));
-  } else if (game.clients.size === 0 && (game.paused || game.pausedPlayers.size > 0)) {
-    game.paused = false;
-    game.pausedPlayers.clear();
+  } catch (e) {
+    console.error(`[IDLE_INTERVAL] Error: ${e.message}`);
   }
 }, 60000);
 let updateVersion = 0;
@@ -1863,45 +2144,64 @@ const MAX_FRAME_HISTORY = 60;
 let tickInterval = setInterval(() => {
   const tickStart = Date.now();
   try {
-    game.tick();
-  } catch (e) {
-    console.error(`[TICK_CRASH] Frame ${game.frame}: ${e.message}`);
-    console.error(e.stack);
-    game.paused = true;
-    game.pendingInput.clear();
-    game.heldInput.clear();
     try {
-      game.broadcastToClients([MSG_TYPES.UPDATE, { error: 'Game tick error' }]);
-    } catch (be) {
-      console.error(`[TICK_CRASH_BROADCAST] Failed to notify clients: ${be.message}`);
-    }
-    return;
-  }
-
-  try {
-    if (updateVersion >= 2147483647) {
-      console.error('[VERSION_OVERFLOW] Update version overflow, resetting to 0');
-      updateVersion = 0;
-    }
-    updateVersion++;
-    game.broadcastStateUpdate(updateVersion);
-    tickCount++;
-
-    const tickTime = Math.max(0, Date.now() - tickStart);
-    frameTimes.push(tickTime);
-    if (frameTimes.length > MAX_FRAME_HISTORY) {
-      frameTimes.shift();
+      game.tick();
+    } catch (e) {
+      console.error(`[TICK_CRASH] Frame ${game.frame}: ${e.message}`);
+      console.error(e.stack);
+      game.paused = true;
+      try {
+        game.pendingInput.clear();
+        game.heldInput.clear();
+      } catch (ce) {
+        console.error(`[TICK_CRASH_CLEANUP] Failed to clear input: ${ce.message}`);
+      }
+      try {
+        game.broadcastToClients([MSG_TYPES.UPDATE, { error: 'Game tick error', frame: game.frame }]);
+      } catch (be) {
+        console.error(`[TICK_CRASH_BROADCAST] Failed to notify clients: ${be.message}`);
+      }
+      return;
     }
 
-    if (tickCount % 300 === 0) {
-      const avgTime = frameTimes.length > 0 ? frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length : 0;
-      const maxTime = frameTimes.length > 0 ? Math.max(...frameTimes) : 0;
-      const fps = 1000 / TICK_MS;
-      const health = avgTime < TICK_MS * 0.8 ? '✓' : avgTime < TICK_MS ? '⚠' : '✗';
-      console.log(`[PERF] Frame ${game.frame} | ${health} Avg: ${avgTime.toFixed(1)}ms Max: ${maxTime}ms FPS: ${fps} | Clients: ${game.clients.size} Actors: ${game.actors.size}`);
+    try {
+      if (updateVersion >= 2147483647) {
+        console.error('[VERSION_OVERFLOW] Resetting version');
+        updateVersion = 0;
+      }
+      updateVersion++;
+      game.broadcastStateUpdate(updateVersion);
+      tickCount++;
+    } catch (e) {
+      console.error(`[BROADCAST_CRASH] Frame ${game.frame}: ${e.message}`);
+      console.error(e.stack);
+    }
+
+    try {
+      const tickTime = Math.max(0, Date.now() - tickStart);
+      if (isFinite(tickTime) && tickTime >= 0) {
+        frameTimes.push(tickTime);
+        if (frameTimes.length > MAX_FRAME_HISTORY) {
+          frameTimes.shift();
+        }
+      }
+
+      if (tickCount % 300 === 0) {
+        try {
+          const avgTime = frameTimes.length > 0 ? frameTimes.reduce((a, b) => a + b, 0) / frameTimes.length : 0;
+          const maxTime = frameTimes.length > 0 ? Math.max(...frameTimes) : 0;
+          const fps = 1000 / TICK_MS;
+          const health = avgTime < TICK_MS * 0.8 ? '✓' : avgTime < TICK_MS ? '⚠' : '✗';
+          console.log(`[PERF] Frame ${game.frame} | ${health} Avg: ${avgTime.toFixed(1)}ms Max: ${maxTime}ms FPS: ${fps} | Clients: ${game.clients.size} Actors: ${game.actors.size}`);
+        } catch (e) {
+          console.error(`[PERF_CALC] Error: ${e.message}`);
+        }
+      }
+    } catch (e) {
+      console.error(`[TICK_PERF] Error: ${e.message}`);
     }
   } catch (e) {
-    console.error(`[BROADCAST_CRASH] Frame ${game.frame}: ${e.message}`);
+    console.error(`[TICK_INTERVAL] Unhandled error: ${e.message}`);
     console.error(e.stack);
   }
 }, TICK_MS);
