@@ -184,6 +184,8 @@ function serializeActorState(actor) {
     base.og = state.on_ground ? 1 : 0;
     base.spd = state.speed || 200;
   } else if (actor.type === 'enemy') {
+    base.w = 12;
+    base.h = 12;
     base.og = state.on_ground ? 1 : 0;
     const pd = state.patrol_dir;
     if (typeof pd !== 'number' || (pd !== 1 && pd !== -1)) {
@@ -659,8 +661,8 @@ class PhysicsGame {
       return null;
     }
 
-    let width = Math.max(1, extra.width || 32);
-    let height = (type === 'platform' || type === 'breakable_platform') ? 16 : 32;
+    let width = Math.max(1, extra.width || ((type === 'enemy') ? 12 : 32));
+    let height = (type === 'platform' || type === 'breakable_platform') ? 16 : (type === 'enemy') ? 12 : 32;
     if (height <= 0) height = 16;
     if (width <= 0) width = 32;
     const isStatic = type === 'platform' || type === 'breakable_platform';
