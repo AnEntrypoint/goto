@@ -10,4 +10,7 @@ build/
 .godot/
 *.md
 !README.md
+!TESTING.md
+!TESTING_QUICKSTART.md
+!PHASE7_TESTING_SUMMARY.md
 glootie/
