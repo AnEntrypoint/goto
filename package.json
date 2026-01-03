@@ -1,0 +1,12 @@
+{
+  "name": "group-voice-chat",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "cd server && npm run dev",
+    "server": "cd server && npm start",
+    "client": "echo 'No client configured'"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
