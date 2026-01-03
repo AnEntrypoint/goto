@@ -7,7 +7,8 @@ const { Engine, World, Body, Events, Composite } = require('matter-js');
 
 const { StructuredLogger, FrameProfiler, MemoryMetrics, ActorLifecycleTracker, CollisionStats, NetworkMetrics, PlayerDisconnectTracker, AlertingRules, SLODefinitions, PrometheusMetrics } = require('./observability');
 const { DataStore } = require('./state-store');
-const PORT = process.env.PORT || 3008;
+const { config } = require('./config');
+const PORT = config.port;
 const TICK_RATE = 60;
 const TICK_MS = 1000 / TICK_RATE;
 if (Math.abs(TICK_MS - 16.666666666666668) > 0.01) {
@@ -3003,6 +3004,38 @@ app.get('/api/data-integrity', (req, res) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
-});
+let currentPort = PORT;
+const maxRetries = 10;
+
+function createNewServer() {
+  const newServer = http.createServer(app);
+  const newWss = new WebSocket.Server({ server: newServer });
+  return { server: newServer, wss: newWss };
+}
+
+function startListening(serverObj, port, retries = 0) {
+  const { server: srv, wss: websocketServer } = serverObj;
+
+  const handleError = (err) => {
+    if (err.code === 'EADDRINUSE' && retries < maxRetries) {
+      console.log(`Port ${port} in use, trying ${port + 1}...`);
+      srv.close();
+      const newServerObj = createNewServer();
+      setTimeout(() => {
+        startListening(newServerObj, port + 1, retries + 1);
+      }, 100);
+    } else {
+      console.error(`Failed to bind to port: ${err.message}`);
+      process.exit(1);
+    }
+  };
+
+  srv.once('error', handleError);
+  websocketServer.once('error', handleError);
+
+  srv.listen(port, () => {
+    console.log(`Server listening on port ${port}`);
+  });
+}
+
+startListening({ server, wss }, currentPort);
